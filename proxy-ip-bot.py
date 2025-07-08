@@ -6,7 +6,7 @@ import httpx
 import io
 import re
 import ipaddress
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, ReplyKeyboardRemove
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, ConversationHandler, MessageHandler, filters
 from telegram.constants import ParseMode, ChatType
 from telegram.error import BadRequest
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 # --- Constants ---
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-WORKER_URL = "https://YourProxyIPCheckerLink.pages.dev"
+WORKER_URL = "https://check79.pages.dev"
 INPUT_STATE = 0
 
 COUNTRIES = {
@@ -62,7 +62,7 @@ def parse_ip_range(range_str: str) -> list[str]:
 
 # --- Live Testing Logic ---
 
-async def test_ips_and_update_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, ips_to_check: list, title: str):
+async def test_ips_and_update_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, ips_to_check: list, title: str, send_files: bool = True):
     test_id = str(uuid.uuid4())
     context.user_data[test_id] = {'status': 'running', 'ips': ips_to_check, 'checked_ips': set(), 'successful': []}
     
@@ -75,9 +75,9 @@ async def test_ips_and_update_message(context: ContextTypes.DEFAULT_TYPE, chat_i
 
     await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=f"Starting test for {len(ips_to_check)} IPs...", reply_markup=reply_markup)
     
-    context.application.create_task(process_ips_in_batches(context, chat_id, message_id, test_id, title))
+    context.application.create_task(process_ips_in_batches(context, chat_id, message_id, test_id, title, send_files))
 
-async def process_ips_in_batches(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, test_id: str, title: str):
+async def process_ips_in_batches(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, test_id: str, title: str, send_files: bool):
     try:
         test_data = context.user_data.get(test_id)
         if not test_data: return
@@ -114,7 +114,7 @@ async def process_ips_in_batches(context: ContextTypes.DEFAULT_TYPE, chat_id: in
                 details = f"({res['info'].get('country', 'N/A')} - {res['info'].get('as', 'N/A')})"
                 message_parts.append(f"`{res.get('ip')} {details}`")
             
-            reply_text = "\n\n".join(message_parts)
+            reply_text = "\n".join(message_parts)
             
             if reply_text != last_update_text:
                 try:
@@ -128,14 +128,12 @@ async def process_ips_in_batches(context: ContextTypes.DEFAULT_TYPE, chat_id: in
         final_status = test_data.get('status')
         successful_results = test_data.get('successful')
 
-        final_message_text = ""
+        final_message_text = f"**{title}**\nTest completed."
         if final_status == 'stopped':
             final_message_text = "Operation stopped."
         elif not successful_results:
             final_message_text = f"**{title}**\nNo successful proxies found."
-        else:
-            final_message_text = f"**{title}**\nTest completed."
-
+            
         await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=final_message_text, parse_mode=ParseMode.MARKDOWN, reply_markup=None)
 
         if successful_results:
@@ -143,30 +141,31 @@ async def process_ips_in_batches(context: ContextTypes.DEFAULT_TYPE, chat_id: in
             copy_text = "\n".join(sorted_ips)
             await context.bot.send_message(chat_id=chat_id, text=f"To copy all IPs, tap the code block below:\n```\n{copy_text}\n```", parse_mode=ParseMode.MARKDOWN_V2)
 
-            file_name = f"successful_proxies_{uuid.uuid4().hex[:6]}"
-            txt_file = io.BytesIO(copy_text.encode('utf-8'))
-            await context.bot.send_document(chat_id=chat_id, document=txt_file, filename=f"{file_name}.txt")
-            csv_file = io.BytesIO(copy_text.encode('utf-8'))
-            await context.bot.send_document(chat_id=chat_id, document=csv_file, filename=f"{file_name}.csv")
+            if send_files:
+                file_name = f"successful_proxies_{uuid.uuid4().hex[:6]}"
+                txt_file = io.BytesIO(copy_text.encode('utf-8'))
+                await context.bot.send_document(chat_id=chat_id, document=txt_file, filename=f"{file_name}.txt")
+                csv_file = io.BytesIO(copy_text.encode('utf-8'))
+                await context.bot.send_document(chat_id=chat_id, document=csv_file, filename=f"{file_name}.csv")
             
     finally:
         if test_id in context.user_data: del context.user_data[test_id]
 
-# --- Command & Conversation Handlers ---
+# --- Command Handlers ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if '@' in update.message.text.split()[0] and update.message.chat.type != ChatType.PRIVATE:
-        return
     await update.message.reply_text("👋 Welcome! Use a command with arguments (e.g., `/proxyip 1.1.1.1`) or alone to get a prompt.")
 
 async def start_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if '@' in update.message.text.split()[0] and update.message.chat.type != ChatType.PRIVATE:
-        return ConversationHandler.END
-
     command = update.message.text.split()[0].replace('/', '')
     
+    # NEW: Check for username in groups and reply with help text
+    if '@' in update.message.text.split()[0] and update.message.chat.type != ChatType.PRIVATE:
+        await update.message.reply_text(f"Please use the command without mentioning the bot's name, like `/{command}`.", parse_mode=ParseMode.MARKDOWN)
+        return ConversationHandler.END
+
     if context.args:
-        sent_message = await update.message.reply_text("Processing your request...")
+        sent_message = await update.message.reply_text(f"Processing your request for `/{command}`...")
         await process_command_logic(update, context, command, context.args, sent_message)
         return ConversationHandler.END
     else:
@@ -179,20 +178,28 @@ async def start_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE)
         }.get(command, "Please send your input. In groups, please **reply** to this message.")
         
         prompt_message = await update.message.reply_text(prompt_text, parse_mode=ParseMode.MARKDOWN)
-        context.user_data['prompt_message_id'] = prompt_message.message_id
+        if 'pending_prompts' not in context.chat_data:
+            context.chat_data['pending_prompts'] = {}
+        context.chat_data['pending_prompts'][prompt_message.message_id] = {
+            "command": command,
+            "user_id": update.message.from_user.id
+        }
         return INPUT_STATE
 
 async def handle_conversation_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    command = context.user_data.pop('command_type', None)
-    prompt_message_id = context.user_data.pop('prompt_message_id', None)
+    if not update.message.reply_to_message or update.message.reply_to_message.from_user.id != context.bot.id:
+        return ConversationHandler.END
 
-    if update.message.chat.type != ChatType.PRIVATE:
-        if not update.message.reply_to_message or update.message.reply_to_message.message_id != prompt_message_id:
-            return ConversationHandler.END 
+    prompt_message_id = update.message.reply_to_message.message_id
+    pending_prompts = context.chat_data.get('pending_prompts', {})
+    stored_data = pending_prompts.pop(prompt_message_id, None)
+
+    if not stored_data or stored_data["user_id"] != update.message.from_user.id:
+        context.chat_data['pending_prompts'][prompt_message_id] = stored_data # Put it back if wrong user
+        return ConversationHandler.END 
             
-    if not command: return ConversationHandler.END
-
-    sent_message = await update.message.reply_text("Processing your request...")
+    command = stored_data['command']
+    sent_message = await update.message.reply_text("Processing your replied input...")
     inputs = update.message.text.split()
     await process_command_logic(update, context, command, inputs, sent_message)
     
@@ -211,8 +218,10 @@ async def process_command_logic(update: Update, context: ContextTypes.DEFAULT_TY
         for domain in inputs:
              api_result = await fetch_from_api("resolve", {"domain": domain})
              if api_result.get("success"): all_ips_to_check.extend(api_result.get("ips", []))
-        if not all_ips_to_check: await message.edit_text("Could not resolve any IPs from the provided domains.")
-        else: await test_ips_and_update_message(context, update.message.chat_id, message.message_id, list(set(all_ips_to_check)), f"Results for {', '.join(inputs)}")
+        if not all_ips_to_check:
+            await message.edit_text("Could not resolve any IPs from the provided domains.")
+        else:
+            await test_ips_and_update_message(context, update.message.chat_id, message.message_id, list(set(all_ips_to_check)), f"Results for {', '.join(inputs)}")
     elif command == "file":
         file_url = inputs[0]
         try:
@@ -226,12 +235,12 @@ async def process_command_logic(update: Update, context: ContextTypes.DEFAULT_TY
         except Exception as e: await message.edit_text(f"Error processing file: {e}")
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if 'command_type' in context.user_data: context.user_data.pop('command_type', None)
-    await update.message.reply_text("Operation cancelled.", reply_markup=ReplyKeyboardRemove())
+    await update.message.reply_text("Operation cancelled.")
     return ConversationHandler.END
     
 async def freeproxyip_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if '@' in update.message.text.split()[0] and update.message.chat.type != ChatType.PRIVATE:
+        await update.message.reply_text(f"Please use `/freeproxyip` without mentioning the bot's name.", parse_mode=ParseMode.MARKDOWN)
         return
     keyboard = []
     row = []
@@ -286,34 +295,35 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         context.user_data[test_id]['status'] = 'stopped'
 
 async def post_init(application: Application):
+    """Actions to run after bot initialization to set commands."""
     commands = [
-        BotCommand("start", "👋 Start Using Bot"),
-        BotCommand("proxyip", "Check Proxy IPs"),
-        BotCommand("iprange", "Check IP Ranges"),
-        BotCommand("domain", "Resolving Domain(s)"),
-        BotCommand("file", "Check Proxy IPs From a File URL"),
-        BotCommand("freeproxyip", "✨ Get Free Proxies By Country"),
-        BotCommand("cancel", "❌ Cancel Current Operation"),
+        BotCommand("start", "👋 Get welcome message"),
+        BotCommand("proxyip", "Check one or more Proxy IPs"),
+        BotCommand("iprange", "Check one or more IP Ranges"),
+        BotCommand("domain", "Check one or more domains"),
+        BotCommand("file", "Check IPs from a file URL"),
+        BotCommand("freeproxyip", "✨ Get free proxies by country"),
+        BotCommand("cancel", "❌ Cancel current operation"),
     ]
     await application.bot.set_my_commands(commands)
 
 # --- Main Application Setup ---
 def main() -> None:
-    cprint("This Bot Made With ❤️ By @mehdiasmart", "light_cyan")
+    cprint("made with ❤️ by @mehdiasmart", "light_cyan")
     
     application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
     
+    all_commands = ["proxyip", "iprange", "domain", "file"]
     conv_handler = ConversationHandler(
-        entry_points=[
-            CommandHandler("proxyip", start_conversation),
-            CommandHandler("iprange", start_conversation),
-            CommandHandler("domain", start_conversation),
-            CommandHandler("file", start_conversation),
-        ],
+        entry_points=[CommandHandler(cmd, start_conversation) for cmd in all_commands],
         states={
             INPUT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_conversation_input)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[CommandHandler(cmd, start_conversation) for cmd in all_commands] + 
+                   [CommandHandler("start", start_command), 
+                    CommandHandler("freeproxyip", freeproxyip_command),
+                    CommandHandler("cancel", cancel)],
+        allow_reentry=True
     )
 
     application.add_handler(CommandHandler("start", start_command))
@@ -322,6 +332,7 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(button_handler))
 
     application.run_polling(allowed_updates=Update.ALL_TYPES)
+
 
 if __name__ == "__main__":
     main()
