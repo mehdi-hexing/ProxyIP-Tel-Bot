@@ -1,3 +1,4 @@
 python-telegram-bot==21.0.1
 httpx==0.27.0
 termcolor==2.4.0
+ipaddress==1.0.23
