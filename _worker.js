@@ -1,6 +1,6 @@
 import { connect } from 'cloudflare:sockets';
 
-// --- Server-Side Helper Functions ---
+//---Server-Side Helper Functions---
 
 async function doubleHash(text) {
   const encoder = new TextEncoder();
