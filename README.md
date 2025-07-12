@@ -40,7 +40,7 @@ This service is the backend engine that the Python bot calls to check proxies.
 3.  **Create a Pages Project:** Click on the "Create application" button, then go to the "Pages" tab and click "Create a new project".
 4.  **Choose Direct Upload:** Select the "Direct Upload" option.
 5.  **Upload File:**
-    **Download Worker:** Download [Worker.js](https://github.com/mehdi-hexing/CF-Workers-CheckProxyIP/edit/main/_worker.js) and Upload it.
+    **Download Worker:** Download [_Worker.js](https://github.com/mehdi-hexing/CF-Workers-CheckProxyIP/blob/main/_worker.js) and Upload it.
 7.  **Deploy:** Click the `Save and Deploy` button.
 8.  **Get Your URL:** After deployment is complete, you will get a unique URL like `https://<your-project>.pages.dev`. **Copy this URL.** This is your `WORKER_URL`.
 
