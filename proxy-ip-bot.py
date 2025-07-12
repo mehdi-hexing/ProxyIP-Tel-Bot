@@ -143,7 +143,7 @@ async def process_ips_in_batches(context: ContextTypes.DEFAULT_TYPE, chat_id: in
                 prefix = ""
                 if domain_map and 'domain_index' in res and res['domain_index'] in domain_map:
                     prefix = f"{format_number_with_emojis(res['domain_index'] + 1)} "
-                message_parts.append(f"{prefix}`{res.get('ip')} {details}`")
+                message_parts.append(f"`{res.get('ip')} {details}`")
             
             reply_text = "\n".join(message_parts)
             
@@ -233,19 +233,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
-    
-    message_to_send = "Operation cancelled."
-    if update.message and '@' in update.message.text.split()[0] and update.message.chat.type != ChatType.PRIVATE:
-        message_to_send = f"For future reference, please use `/cancel` without the mention.\n\nOperation cancelled."
-    
     if update.callback_query:
-        await update.callback_query.edit_message_text(message_to_send)
+        await update.callback_query.edit_message_text("Operation cancelled.")
     else:
-        await update.message.reply_text(message_to_send)
-        
+        await update.message.reply_text("Operation cancelled.")
     return ConversationHandler.END
     
 async def start_main_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handles commands with/without args, starting a conversation if needed."""
     command_text = update.message.text.split()[0]
     command = command_text.replace('/', '').split('@')[0]
     
@@ -278,6 +273,7 @@ async def start_main_conversation(update: Update, context: ContextTypes.DEFAULT_
         return AWAIT_MAIN_INPUT
 
 async def handle_main_conversation_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handles user's text input after a command prompt."""
     command = None
     if update.message.chat.type != ChatType.PRIVATE:
         if update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id:
@@ -476,13 +472,7 @@ async def deletechat_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     
     if query.data == "del_confirm_no":
-        user_id_str = str(query.from_user.id)
-        db = load_db()
-        user_chats = db.get(user_id_str, [])
-        keyboard = [[InlineKeyboardButton(chat['name'], callback_data=f"del_chat_{chat['chat_id']}")] for chat in user_chats]
-        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="del_cancel")])
-        await query.edit_message_text("Select a destination to delete:", reply_markup=InlineKeyboardMarkup(keyboard))
-        return SELECT_CHAT_TO_DELETE
+        return await deletechat_start(query.message, context)
 
     user_id_str = str(query.from_user.id)
     chat_id_to_delete = context.user_data.pop('chat_to_delete', None)
@@ -504,7 +494,7 @@ async def post_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message.chat.type != ChatType.PRIVATE:
         await update.message.reply_text("To use this command, please send it to me in a private chat.")
         return ConversationHandler.END
-        
+
     db = load_db()
     user_chats = db.get(str(update.message.from_user.id), [])
     if not user_chats:
@@ -565,9 +555,6 @@ async def post_handle_country_selection(update: Update, context: ContextTypes.DE
     query = update.callback_query
     await query.answer()
 
-    if query.data == "post_cmd_back":
-        return await post_select_chat(update, context)
-
     target_chat_id_str = context.user_data.get('target_chat_id')
     country_code = query.data.split('_')[-1]
     if not target_chat_id_str: return ConversationHandler.END
@@ -618,7 +605,7 @@ async def run_post_command_logic(context: ContextTypes.DEFAULT_TYPE, target_chat
         await run_test_and_post(context, target_chat_id, ips_to_check, title, confirmation_message)
     except Exception as e:
         await context.bot.send_message(chat_id=confirmation_message.chat_id, text=f"An error occurred during post operation: {e}")
-        try: # Try to delete confirmation message even on failure
+        try:
             await context.bot.delete_message(chat_id=confirmation_message.chat_id, message_id=confirmation_message.message_id)
         except Exception: pass
 
@@ -667,8 +654,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     elif callback_type == 'cancel':
         context.user_data[test_id]['status'] = 'stopped'
 
+# --- Main Application Setup ---
 async def post_init(application: Application):
-    """Sets bot commands after initialization."""
     commands = [
         BotCommand("start", "🤖 Start Using Bot"),
         BotCommand("proxyip", "🔍 Check Proxy IPs"),
@@ -731,7 +718,10 @@ def main() -> None:
             SELECT_TARGET_CHAT: [CallbackQueryHandler(post_select_chat, pattern="^post_chat_")],
             SELECT_COMMAND: [CallbackQueryHandler(post_select_command, pattern="^post_cmd_")],
             AWAIT_COMMAND_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_handle_input)],
-            AWAIT_POST_COUNTRY: [CallbackQueryHandler(post_handle_country_selection, pattern="^post_country_")]
+            AWAIT_POST_COUNTRY: [
+                CallbackQueryHandler(post_handle_country_selection, pattern="^post_country_"),
+                CallbackQueryHandler(post_select_chat, pattern="^post_cmd_back$")
+            ]
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
     )
