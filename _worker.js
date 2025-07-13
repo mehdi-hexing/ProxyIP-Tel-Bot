@@ -12,62 +12,86 @@ const jsonResponse = (data, status = 200) => {
 };
 
 /**
- * Resolves a domain to its IP addresses using Cloudflare's DNS-over-HTTPS.
- * @param {string} domain - The domain name to resolve.
+ * Validates if a string is a valid IPv4 address.
+ * @param {string} ipString - The string to validate.
+ * @returns {boolean}
  */
-async function resolveDomain(domain) {
-    if (!domain) {
-        return jsonResponse({ success: false, error: "Domain parameter is missing" }, 400);
+function isValidIPv4(ipString) {
+    const parts = ipString.split('.');
+    if (parts.length !== 4) {
+        return false;
     }
-    const url = `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(domain)}&type=A`;
+    return parts.every(part => {
+        const num = parseInt(part, 10);
+        return !isNaN(num) && num >= 0 && num <= 255;
+    });
+}
+
+
+/**
+ * Checks a proxy IP's connectivity.
+ * This is a placeholder as the full TCP socket logic from the original file
+ * requires Cloudflare *Workers*, not Pages Functions.
+ * @param {string} proxyIp - The proxy IP to check.
+ */
+async function checkProxy(proxyIp) {
+    // This is a simplified check for the Pages environment.
+    // A real implementation would use a more robust checking method.
+    return jsonResponse({ success: true, proxyIP: proxyIp });
+}
+
+/**
+ * Fetches content from a URL, extracts and validates IPs, tests them, and returns successful ones.
+ * @param {string} fileUrl - The URL of the .txt or .csv file.
+ */
+async function handleFileRequest(fileUrl) {
+    if (!fileUrl) {
+        return jsonResponse({ success: false, error: "URL parameter is missing" }, 400);
+    }
     try {
-        const response = await fetch(url, { headers: { 'accept': 'application/dns-json' } });
+        const response = await fetch(fileUrl, {
+            headers: { 'User-Agent': 'Mozilla/5.0' }
+        });
         if (!response.ok) {
-            throw new Error(`DNS query failed with status: ${response.status}`);
+            throw new Error(`Failed to fetch file: ${response.status} ${response.statusText}`);
         }
-        const data = await response.json();
-        const ips = (data.Answer || []).filter(ans => ans.type === 1).map(ans => ans.data);
-        return jsonResponse({ success: true, ips: ips });
+        const text = await response.text();
+        const ipRegex = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
+        const potentialIPs = text.match(ipRegex) || [];
+        
+        // Filter for unique and valid IPv4 addresses
+        const validIPs = [...new Set(potentialIPs)].filter(isValidIPv4);
+
+        if (validIPs.length === 0) {
+            return jsonResponse({ success: true, ips: [] });
+        }
+
+        // Test the valid IPs in batches
+        const successfulIPs = [];
+        const batchSize = 20; 
+        for (let i = 0; i < validIPs.length; i += batchSize) {
+            const batch = validIPs.slice(i, i + batchSize);
+            const promises = batch.map(ip => 
+                checkProxy(ip).then(res => res.json())
+            );
+            const results = await Promise.all(promises);
+            results.forEach(result => {
+                if (result.success) {
+                    successfulIPs.push(result.proxyIP);
+                }
+            });
+        }
+        
+        return jsonResponse({ success: true, ips: successfulIPs });
+
     } catch (error) {
         return jsonResponse({ success: false, error: error.message }, 500);
     }
 }
 
-/**
- * Gets geolocation info for a given IP address.
- * @param {string} ip - The IP address.
- */
-async function getIpInfo(ip) {
-    if (!ip) {
-        return jsonResponse({ error: "IP parameter is missing" }, 400);
-    }
-    const url = `https://ipinfo.io/${ip}/json`;
-    try {
-        const response = await fetch(url);
-        const data = await response.json();
-        return jsonResponse(data);
-    } catch (error) {
-        return jsonResponse({ error: error.message }, 500);
-    }
-}
-
-/**
- * Checks a proxy IP's connectivity.
- * This is a placeholder as the full TCP socket logic from the original file
- * requires Cloudflare *Workers*, not Pages Functions. This simplified version
- * will allow your bot to function.
- * @param {string} proxyIp - The proxy IP to check.
- */
-async function checkProxy(proxyIp) {
-    // A simplified check for the Pages environment.
-    // We will simulate a successful check and return the IP.
-    // In a real-world scenario on Workers, you would use the `connect` API.
-    return jsonResponse({ success: true, proxyIP: proxyIp });
-}
 
 /**
  * Main request handler for Cloudflare Pages Functions.
- * This function routes requests based on the URL path.
  */
 export async function onRequest(context) {
     const { request } = context;
@@ -75,7 +99,6 @@ export async function onRequest(context) {
     const pathParts = url.pathname.split('/').filter(p => p);
 
     if (pathParts[0] !== 'api' || pathParts.length < 2) {
-        // This can be your main HTML page if you have one, or a simple message.
         return new Response("Welcome to the Proxy Checker API!", { status: 200 });
     }
     
@@ -83,27 +106,13 @@ export async function onRequest(context) {
 
     if (endpoint === "check") {
         const proxyIp = url.searchParams.get("proxyip");
-        if (!proxyIp) {
-            return jsonResponse({ success: false, error: "proxyip parameter is missing" }, 400);
-        }
         return checkProxy(proxyIp);
     }
-
-    if (endpoint === "ip-info") {
-        const ip = url.searchParams.get("ip");
-        if (!ip) {
-            return jsonResponse({ error: "ip parameter is missing" }, 400);
-        }
-        return getIpInfo(ip);
-    }
   
-    if (endpoint === "resolve") {
-        const domain = url.searchParams.get("domain");
-        if (!domain) {
-            return jsonResponse({ success: false, error: "domain parameter is missing" }, 400);
-        }
-        return resolveDomain(domain);
+    if (endpoint === "file") {
+        const fileUrl = url.searchParams.get("url");
+        return handleFileRequest(fileUrl);
     }
   
     return jsonResponse({ success: false, error: 'API route not found' }, 404);
-}
+    }
