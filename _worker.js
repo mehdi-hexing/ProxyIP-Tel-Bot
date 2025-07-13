@@ -1,6 +1,6 @@
 import { connect } from 'cloudflare:sockets';
 
-//---Server-Side Helper Functions---
+// --- Server-Side Helper Functions ---
 
 async function doubleHash(text) {
   const encoder = new TextEncoder();
@@ -139,6 +139,258 @@ const ipv6Regex = /(?:[A-F0-9]{1,4}:){7}[A-F0-9]{1,4}|\[(?:[A-F0-9]{1,4}:){7}[A-
 
 // --- HTML Page Generators ---
 
+function generateDomainResolverPageHTML() {
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Domain Resolve & IP Checker</title>
+    <style>
+        :root {
+            --bg-color: #1a1a1a;
+            --text-color: #f0f0f0;
+            --primary-color: #007bff;
+            --secondary-color: #2a2a2a;
+            --border-color: #444;
+            --success-color: #28a745;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 1em;
+            display: flex;
+            justify-content: center;
+        }
+        .container {
+            width: 100%;
+            max-width: 800px;
+        }
+        h1 {
+            color: var(--primary-color);
+            text-align: center;
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 0.5em;
+        }
+        .input-section {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 1.5em;
+        }
+        #domainInput {
+            flex-grow: 1;
+            padding: 10px;
+            background-color: var(--secondary-color);
+            border: 1px solid var(--border-color);
+            color: var(--text-color);
+            border-radius: 5px;
+            font-size: 1em;
+        }
+        #resolveBtn, .action-btn {
+            padding: 10px 20px;
+            background-color: var(--primary-color);
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 1em;
+            transition: background-color 0.2s;
+        }
+        #resolveBtn:hover, .action-btn:hover {
+            background-color: #0056b3;
+        }
+        .results-section {
+            margin-top: 1.5em;
+            padding: 1em;
+            background-color: var(--secondary-color);
+            border: 1px solid var(--border-color);
+            border-radius: 5px;
+            display: none; /* Hidden by default */
+        }
+        .domain-display {
+            display: flex;
+            align-items: center;
+            margin-bottom: 1em;
+        }
+        .domain-display code {
+            background-color: #333;
+            padding: 5px 10px;
+            border-radius: 5px;
+            cursor: pointer;
+            border: 1px solid var(--border-color);
+        }
+        #ipList {
+            list-style: none;
+            padding: 0;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        #ipList li {
+            padding: 8px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        #ipList li:last-child {
+            border-bottom: none;
+        }
+        .action-buttons {
+            margin-top: 1em;
+            display: flex;
+            gap: 10px;
+        }
+        .loader {
+            text-align: center;
+            padding: 1em;
+            font-style: italic;
+        }
+        /* Simple toggle for demo, adapt to your site's theme switcher */
+        #theme-toggle {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <button id="theme-toggle" class="action-btn" style="position: absolute; top: 15px; right: 15px;">☀️/🌙</button>
+
+    <h1>Domain Resolve Results:</h1>
+    
+    <div class="input-section">
+        <input type="text" id="domainInput" placeholder="Enter domain (e.g., example.com)">
+        <button id="resolveBtn">Resolve</button>
+    </div>
+
+    <div class="results-section" id="resultsSection">
+        <div class="domain-display">
+            <span>domain:</span>&nbsp;
+            <code id="resolvedDomain" title="Click to copy"></code>
+        </div>
+        <ul id="ipList">
+            <div class="loader">Waiting for results...</div>
+        </ul>
+        <div class="action-buttons">
+            <button id="downloadBtn" class="action-btn">Download IPs</button>
+            <button id="copyBtn" class="action-btn">Copy All IPs</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    const resolveBtn = document.getElementById('resolveBtn');
+    const domainInput = document.getElementById('domainInput');
+    const resultsSection = document.getElementById('resultsSection');
+    const resolvedDomainEl = document.getElementById('resolvedDomain');
+    const ipListEl = document.getElementById('ipList');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const copyBtn = document.getElementById('copyBtn');
+
+    let successfulIPs = [];
+
+    // Helper to copy text
+    const copyTextToClipboard = (text, element) => {
+        navigator.clipboard.writeText(text).then(() => {
+            const originalText = element.textContent;
+            element.textContent = 'Copied!';
+            setTimeout(() => {
+                element.textContent = originalText;
+            }, 1500);
+        }).catch(err => {
+            console.error('Failed to copy text: ', err);
+        });
+    };
+    
+    resolvedDomainEl.addEventListener('click', () => {
+        copyTextToClipboard(resolvedDomainEl.textContent, resolvedDomainEl);
+    });
+
+    downloadBtn.addEventListener('click', () => {
+        if (successfulIPs.length === 0) return;
+        const text = successfulIPs.join('\\n');
+        const blob = new Blob([text], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = \`\${domainInput.value.trim()}_ips.txt\`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    });
+
+    copyBtn.addEventListener('click', () => {
+        if (successfulIPs.length === 0) return;
+        copyTextToClipboard(successfulIPs.join('\\n'), copyBtn);
+    });
+
+    resolveBtn.addEventListener('click', async () => {
+        const domain = domainInput.value.trim();
+        if (!domain) {
+            alert('Please enter a domain.');
+            return;
+        }
+
+        // Reset state
+        ipListEl.innerHTML = '<div class="loader">Resolving and checking...</div>';
+        resultsSection.style.display = 'block';
+        resolvedDomainEl.textContent = domain;
+        successfulIPs = [];
+
+        try {
+            // 1. Resolve domain to get IPs
+            const resolveResponse = await fetch(\`/api/resolve?domain=\${encodeURIComponent(domain)}\`);
+            if (!resolveResponse.ok) throw new Error('Failed to resolve domain.');
+            
+            const resolveData = await resolveResponse.json();
+            if (!resolveData.success || resolveData.ips.length === 0) {
+                ipListEl.innerHTML = '<li>No IPs found for this domain.</li>';
+                return;
+            }
+
+            const ipsToCheck = resolveData.ips;
+            ipListEl.innerHTML = \`<div class="loader">Found \${ipsToCheck.length} IPs. Now checking...</div>\`;
+
+            // 2. Check each IP
+            const checkPromises = ipsToCheck.map(ip => 
+                fetch(\`/api/check?proxyip=\${ip}\`)
+                    .then(res => res.json())
+                    .then(data => data.success ? fetch(\`/api/ip-info?ip=\${data.proxyIP}\`).then(res => res.json()) : null)
+                    .catch(() => null) // Ignore failed checks
+            );
+            
+            const results = await Promise.all(checkPromises);
+            
+            ipListEl.innerHTML = ''; // Clear loader
+            
+            results.forEach(result => {
+                if (result && result.ip) {
+                    const li = document.createElement('li');
+                    const country = result.country || 'N/A';
+                    const org = result.org || 'N/A';
+                    li.textContent = \`\${result.ip} (\${country} - \${org})\`;
+                    ipListEl.appendChild(li);
+                    successfulIPs.push(result.ip);
+                }
+            });
+
+            if (successfulIPs.length === 0) {
+                ipListEl.innerHTML = '<li>No working proxies found from the resolved IPs.</li>';
+            }
+
+        } catch (error) {
+            console.error('Error:', error);
+            ipListEl.innerHTML = \`<li>An error occurred: \${error.message}</li>\`;
+        }
+    });
+
+</script>
+</body>
+</html>`;
+}
+
 function generateClientSideCheckPageHTML({ title, subtitleLabel, subtitleContent, ipsToCheck, temporaryTOKEN, pageType, contentHash }) {
     const ipsJson = JSON.stringify(ipsToCheck);
     let subtitleHTML = '';
@@ -146,7 +398,7 @@ function generateClientSideCheckPageHTML({ title, subtitleLabel, subtitleContent
         if (pageType === 'file') {
              subtitleHTML = `<div class="ranges-list"><strong>${subtitleLabel}</strong> <a href="${subtitleContent}" class="range-tag" target="_blank" rel="noopener noreferrer">${subtitleContent}</a></div>`;
         } else if (pageType === 'iprange') {
-             const ranges = subtitleContent.split(',').map(r => `<span class="range-tag" data-copy="${r.trim()}">${r.trim()}</span>`).join('<br>');
+             const ranges = subtitleContent.split(',').map(r => `<span class="range-tag" onclick="copyToClipboard('${r.trim()}', this)">${r.trim()}</span>`).join('<br>');
              subtitleHTML = `<div class="ranges-list"><strong>${subtitleLabel}</strong><br>${ranges}</div>`;
         } else {
              subtitleHTML = `<div class="ranges-list"><strong>${subtitleLabel}</strong> <span class="range-tag">${subtitleContent}</span></div>`;
@@ -756,11 +1008,11 @@ function generateMainHTML(faviconURL) {
       <div class="form-section">
         <label for="proxyip" class="form-label">Enter IPs or Domains (one per line):</label>
         <div class="input-wrapper">
-        <textarea id="proxyip" class="form-input" rows="4" placeholder="127.0.0.1 or nima.nscl.ir" autocomplete="off"></textarea>
+          <textarea id="proxyip" class="form-input" rows="4" placeholder="127.0.0.1 or nima.nscl.ir" autocomplete="off"></textarea>
         </div>
         <label for="proxyipRangeRows" class="form-label">Enter IP Range(s) (one per line):</label>
         <div class="input-wrapper">
-        <textarea id="proxyipRangeRows" class="form-input" rows="3" placeholder="127.0.0.0/24 or 127.0.0.0-255" autocomplete="off"></textarea>
+          <textarea id="proxyipRangeRows" class="form-input" rows="3" placeholder="127.0.0.0/24 or 127.0.0.0-255" autocomplete="off"></textarea>
         </div>
         <button id="checkBtn" class="btn-primary">
             <span style="display: flex; align-items: center; justify-content: center;">
@@ -786,11 +1038,10 @@ function generateMainHTML(faviconURL) {
         </div>
     </div>
     <div class="api-docs">
-       <h3 style="margin-bottom:15px; text-align:center;">URL PATHDocumentation</h3>
+       <h3 style="margin-bottom:15px; text-align:center;">URL PATH Documentation</h3>
        <p><code>/proxyip/IP1,IP2,IP3,...</code></p>
        <p><code>/iprange/127.0.0.0/24,... or 127.0.0.0-255,...</code></p>
        <p><code>/file/https://your.file/ip1.txt or ip1.csv</code></p>
-       <hr style="border:0; border-top: 1px solid var(--border-color); margin: 20px 0;"/>
     </div>
     <footer class="footer">
       <p>© ${year} Proxy IP Checker - By <strong>mehdi-hexing</strong></p>
@@ -813,6 +1064,12 @@ export default {
         const path = url.pathname;
         const UA = request.headers.get('User-Agent') || 'null';
         const hostname = url.hostname;
+        
+        if (path.toLowerCase() === '/domain') {
+            return new Response(generateDomainResolverPageHTML(), {
+                headers: { 'Content-Type': 'text/html;charset=UTF-8' },
+            });
+        }
         
         if (path.toLowerCase().startsWith('/file/') || path.toLowerCase().startsWith('/iprange/') || path.toLowerCase().startsWith('/proxyip/')) {
             const timestamp = Math.ceil(new Date().getTime() / (1000 * 60 * 31));
@@ -917,41 +1174,6 @@ export default {
                 if (ip.includes('[')) ip = ip.replace(/\[|\]/g, '');
                 const data = await getIpInfo(ip);
                 return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });
-            }
-
-            // --- NEW API ENDPOINT FOR THE BOT ---
-            if (path.toLowerCase() === '/api/check_file') {
-                const targetUrl = url.searchParams.get('url');
-                if (!targetUrl || !targetUrl.startsWith('http')) {
-                    return new Response(JSON.stringify({ success: false, error: 'Invalid or missing URL parameter' }), { status: 400, headers: { "Content-Type": "application/json" } });
-                }
-                try {
-                    const response = await fetch(targetUrl, { headers: {'User-Agent': 'ProxyChecker/1.0'} });
-                    if (!response.ok) throw new Error(`Fetch failed: ${response.statusText}`);
-                    
-                    const text = await response.text();
-                    const foundIPs = [...new Set([...(text.match(forgivingIPv4Regex) || []), ...(text.match(ipv6Regex) || [])])];
-                    
-                    const ipsToCheck = foundIPs.filter(ip => {
-                        const parts = ip.split(':');
-                        return parts.length === 1 || !isNaN(parseInt(parts[parts.length - 1]));
-                    });
-
-                    const allResults = [];
-                    const batchSize = 20;
-                    for (let i = 0; i < ipsToCheck.length; i += batchSize) {
-                        const batch = ipsToCheck.slice(i, i + batchSize);
-                        const checkPromises = batch.map(ip => checkProxyIP(ip));
-                        const batchResults = await Promise.all(checkPromises);
-                        allResults.push(...batchResults);
-                    }
-                    
-                    const successfulIPs = allResults.filter(r => r.success).map(r => r.proxyIP);
-                    return new Response(JSON.stringify({ success: true, successful_ips: successfulIPs }), { headers: { "Content-Type": "application/json" } });
-
-                } catch (e) {
-                    return new Response(JSON.stringify({ success: false, error: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
-                }
             }
             
             return new Response(JSON.stringify({success: false, error: 'API route not found'}), { status: 404, headers: { "Content-Type": "application/json" } });
