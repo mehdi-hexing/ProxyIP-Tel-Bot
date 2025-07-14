@@ -1,3 +1,6 @@
+# In 23 Tir of 1404, this project was completed and thanks to Diana for free proxy IPs.
+
+
 import os
 import logging
 import uuid
