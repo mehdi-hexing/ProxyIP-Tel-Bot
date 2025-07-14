@@ -69,7 +69,7 @@ async function checkProxyIP(proxyIP) {
   try {
     tcpSocket = connect({ hostname: hostToCheck.replace(/\[|\]/g, ''), port: portRemote });
     const writer = tcpSocket.writable.getWriter();
-    const httpRequest = 'GET /cdn-cgi/trace HTTP/1.1\r\nHost: speed.cloudflare.com\r\nUser-Agent: checkip/mehdi/\r\nConnection: close\r\n\r\n';
+    const httpRequest = 'GET /cdn-cgi/trace HTTP/1.1\r\nHost: speed.cloudflare.com\r\nUser-Agent: checkip/diana/\r\nConnection: close\r\n\r\n';
     await writer.write(new TextEncoder().encode(httpRequest));
 
     const reader = tcpSocket.readable.getReader();
@@ -127,7 +127,7 @@ function parseIPRangeServer(rangeInput) {
         const prefix = rangeMatch[1];
         const start = parseInt(rangeMatch[2], 10);
         const end = parseInt(rangeMatch[3], 10);
-        if (!isNaN(start) && !isNaN(end) && start >=0 && end <= 255) {
+        if (!isNaN(start) && !isNaN(end) && start <= end && start >=0 && end <= 255) {
             for (let i = start; i <= end; i++) ips.push(`${prefix}${i}`);
         }
     }
@@ -137,6 +137,8 @@ function parseIPRangeServer(rangeInput) {
 const forgivingIPv4Regex = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
 const ipv6Regex = /(?:[A-F0-9]{1,4}:){7}[A-F0-9]{1,4}|\[(?:[A-F0-9]{1,4}:){7}[A-F0-9]{1,4}\]/gi;
 
+// --- HTML Page Generators ---
+
 function generateClientSideCheckPageHTML({ title, subtitleLabel, subtitleContent, ipsToCheck, temporaryTOKEN, pageType, contentHash }) {
     const ipsJson = JSON.stringify(ipsToCheck);
     let subtitleHTML = '';
@@ -144,7 +146,7 @@ function generateClientSideCheckPageHTML({ title, subtitleLabel, subtitleContent
         if (pageType === 'file') {
              subtitleHTML = `<div class="ranges-list"><strong>${subtitleLabel}</strong> <a href="${subtitleContent}" class="range-tag" target="_blank" rel="noopener noreferrer">${subtitleContent}</a></div>`;
         } else if (pageType === 'iprange') {
-             const ranges = subtitleContent.split(',').map(r => `<span class="range-tag" onclick="copyToClipboard('${r.trim()}', this)">${r.trim()}</span>`).join('<br>');
+             const ranges = subtitleContent.split(',').map(r => `<span class="range-tag" data-copy="${r.trim()}">${r.trim()}</span>`).join('<br>');
              subtitleHTML = `<div class="ranges-list"><strong>${subtitleLabel}</strong><br>${ranges}</div>`;
         } else {
              subtitleHTML = `<div class="ranges-list"><strong>${subtitleLabel}</strong> <span class="range-tag">${subtitleContent}</span></div>`;
@@ -326,6 +328,7 @@ function generateClientSideCheckPageHTML({ title, subtitleLabel, subtitleContent
 </html>`;
 }
 
+// --- Client-Side Script for Main Page ---
 const CLIENT_SCRIPT = `
     let isChecking = false;
     let TEMP_TOKEN = '';
@@ -699,6 +702,116 @@ const CLIENT_SCRIPT = `
     }
 `;
 
+// --- Main HTML Generation ---
+function generateMainHTML(faviconURL) {
+  const year = new Date().getFullYear();
+  const countries = {
+    'ALL': 'All Countries', 'AE': 'United Arab Emirates', 'AL': 'Albania', 'AM': 'Armenia', 'AR': 'Argentina', 'AT': 'Austria', 'AU': 'Australia', 'AZ': 'Azerbaijan', 'BE': 'Belgium', 'BG': 'Bulgaria', 'BR': 'Brazil', 'CA': 'Canada', 'CH': 'Switzerland', 'CN': 'China', 'CO': 'Colombia', 'CY': 'Cyprus', 'CZ': 'Czech Republic', 'DE': 'Germany', 'DK': 'Denmark', 'EE': 'Estonia', 'ES': 'Spain', 'FI': 'Finland', 'FR': 'France', 'GB': 'United Kingdom', 'GI': 'Gibraltar', 'HK': 'Hong Kong', 'HU': 'Hungary', 'ID': 'Indonesia', 'IE': 'Ireland', 'IL': 'Israel', 'IN': 'India', 'IR': 'Iran', 'IT': 'Italy', 'JP': 'Japan', 'KR': 'South Korea', 'KZ': 'Kazakhstan', 'LT': 'Lithuania', 'LU': 'Luxembourg', 'LV': 'Latvia', 'MD': 'Moldova', 'MX': 'Mexico', 'MY': 'Malaysia', 'NL': 'Netherlands', 'NZ': 'New Zealand', 'PH': 'Philippines', 'PL': 'Poland', 'PR': 'Puerto Rico', 'PT': 'Portugal', 'QA': 'Qatar', 'RO': 'Romania', 'RS': 'Serbia', 'RU': 'Russia', 'SA': 'Saudi Arabia', 'SC': 'Seychelles', 'SE': 'Sweden', 'SG': 'Singapore', 'SK': 'Slovakia', 'TH': 'Thailand', 'TR': 'Turkey', 'TW': 'Taiwan', 'UA': 'Ukraine', 'US': 'United States', 'UZ': 'Uzbekistan', 'VN': 'Vietnam'
+  };
+
+  const allCountriesButtonImage = 'https://raw.githubusercontent.com/mehdi-hexing/Get-Github-Achievements/main/527112cc-4097-432b-b30c-0b9657451c5f.jpg';
+  const allCountriesURL = `https://raw.githubusercontent.com/NiREvil/vless/main/sub/country_proxies/02_proxies.csv`;
+  const countryFileBaseURL = `https://raw.githubusercontent.com/NiREvil/vless/main/sub/country_proxies/`;
+
+  let countryButtonsHTML = `
+    <div class="country-item">
+        <a href="/file/${encodeURIComponent(allCountriesURL)}" class="country-button" style="background-image: url('${allCountriesButtonImage}');"></a>
+        <p class="country-name">${countries['ALL']}</p>
+    </div>
+  `;
+  
+  for (const code in countries) {
+      if (code === 'ALL') continue;
+      const fileUrl = `${countryFileBaseURL}${code.toUpperCase()}.txt`;
+      countryButtonsHTML += `
+        <div class="country-item">
+            <a href="/file/${encodeURIComponent(fileUrl)}" class="country-button" style="background-image: url('https://flagcdn.com/${code.toLowerCase()}.svg');"></a>
+            <p class="country-name">${countries[code]}</p>
+        </div>
+      `;
+  }
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Proxy IP Checker</title>
+  <link rel="icon" href="${faviconURL}" type="image/x-icon">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root{--bg-gradient:linear-gradient(135deg,#667eea 0%,#764ba2 100%);--bg-primary:#fff;--bg-secondary:#f8f9fa;--text-primary:#2c3e50;--text-light:#adb5bd;--border-color:#dee2e6;--primary-color:#3498db;--success-color:#2ecc71;--error-color:#e74c3c;--result-success-bg:#d4edda;--result-success-text:#155724;--result-error-bg:#f8d7da;--result-error-text:#721c24;--result-warning-bg:#fff3cd;--result-warning-text:#856404;--border-radius:12px;--border-radius-sm:8px}body.dark-mode{--bg-gradient:linear-gradient(135deg,#232526 0%,#414345 100%);--bg-primary:#2c3e50;--bg-secondary:#34495e;--text-primary:#ecf0f1;--text-light:#95a5a6;--border-color:#465b71;--result-success-bg:#2c5a3d;--result-success-text:#fff;--result-error-bg:#5a2c2c;--result-error-text:#fff;--result-warning-bg:#5a4b1e;--result-warning-text:#fff8dd}html{height:100%}body{font-family:'Inter',sans-serif;background:var(--bg-gradient);background-attachment:fixed;color:var(--text-primary);line-height:1.6;margin:0;padding:0;min-height:100%;display:flex;flex-direction:column;align-items:center;transition:background .3s ease,color .3s ease}.container{max-width:800px;width:100%;padding:20px;box-sizing:border-box}.header{text-align:center;margin-bottom:30px}.main-title{font-size:2.2rem;font-weight:700;color:#fff;text-shadow:1px 1px 3px rgba(0,0,0,.2)}.card{background:var(--bg-primary);border-radius:var(--border-radius);padding:25px;box-shadow:0 8px 20px rgba(0,0,0,.1);margin-bottom:25px;transition:background .3s ease}.form-section{display:flex;flex-direction:column;align-items:center}.form-label{display:block;font-weight:500;margin-bottom:8px;color:var(--text-primary);width:100%;max-width:450px;text-align:left}.input-wrapper{width:100%;max-width:450px;margin-bottom:15px}.form-input{width:100%;padding:12px;border:1px solid var(--border-color);border-radius:var(--border-radius-sm);font-size:.95rem;box-sizing:border-box;background-color:var(--bg-secondary);color:var(--text-primary);transition:border-color .3s ease,background-color .3s ease}textarea.form-input{min-height:60px;resize:vertical}.btn-primary{background:linear-gradient(135deg,var(--primary-color),#2980b9);color:#fff;padding:12px 25px;border:none;border-radius:var(--border-radius-sm);font-size:1rem;font-weight:500;cursor:pointer;width:100%;max-width:450px;box-sizing:border-box;display:flex;align-items:center;justify-content:center}.btn-primary:disabled{background:#bdc3c7;cursor:not-allowed}.btn-secondary{background:rgba(230,230,230,0.5);color:var(--text-primary);padding:8px 15px;border:1px solid rgba(0,0,0,0.1);border-radius:var(--border-radius-sm);font-size:.9rem;cursor:pointer;backdrop-filter:blur(5px);-webkit-backdrop-filter:blur(5px)}.loading-spinner{width:16px;height:16px;border:2px solid hsla(0,0%,100%,.3);border-top-color:#fff;border-radius:50%;animation:spin 1s linear infinite;display:none;margin-left:8px}@keyframes spin{to{transform:rotate(360deg)}}.result-section{margin-top:25px}.result-card{padding:18px;border-radius:var(--border-radius-sm);margin-bottom:12px;transition:background-color .3s,color .3s,border-color .3s;background-color:var(--bg-secondary)}.result-card h2{margin-top:0;border-bottom:1px solid var(--border-color);padding-bottom:10px;margin-bottom:15px}.domain-card{margin-bottom:20px}.domain-ip-list{border:1px solid var(--border-color);padding:10px;border-radius:var(--border-radius-sm);max-height:250px;overflow-y:auto;margin-top:10px}.result-success{background-color:var(--result-success-bg);border-left:4px solid var(--success-color);color:var(--result-success-text)}.result-error{background-color:var(--result-error-bg);border-left:4px solid var(--error-color);color:var(--result-error-text)}.result-warning{background-color:var(--result-warning-bg);border-left:4px solid #f39c12;color:var(--result-warning-text)}.result-card h3{display:flex;align-items:center;margin-top:0}.result-card h3 .status-icon-prefix{margin-right:8px}.ip-item-multi{display:flex;justify-content:space-between;align-items:center;padding:8px 5px}.ip-item-multi:not(:last-child){border-bottom:1px solid var(--border-color)}.ip-tag{background-color:var(--bg-primary);padding:3px 7px;border-radius:5px;font-family:'Courier New',Courier,monospace;cursor:pointer}.ip-details{font-size:.9em;color:var(--text-light);padding-left:15px}.copy-btn{cursor:pointer;font-weight:600}.action-buttons{margin-top:20px;display:flex;justify-content:center}.toast{position:fixed;bottom:30px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:12px 20px;border-radius:var(--border-radius-sm);z-index:1001;opacity:0;transition:opacity .3s,transform .3s}.toast.show{opacity:1}.api-docs{margin-top:30px;padding:25px;background:var(--bg-primary);border-radius:var(--border-radius);transition:background .3s ease}.api-docs p{background-color:var(--bg-secondary);border:1px solid var(--border-color);padding:10px;border-radius:4px;margin-bottom:10px;word-break:break-all;transition:background .3s ease,border-color .3s ease}.api-docs p code{background:none;padding:0}.footer{text-align:center;padding:20px;margin-top:30px;color:hsla(0,0%,100%,.8);font-size:.85em;border-top:1px solid hsla(0,0%,100%,.1)}.github-corner svg{fill:var(--primary-color);color:#fff;position:fixed;top:0;border:0;right:0;z-index:9999}body.dark-mode .github-corner svg{fill:#fff;color:#151513}.octo-arm{transform-origin:130px 106px}.github-corner:hover .octo-arm{animation:octocat-wave 560ms ease-in-out}@keyframes octocat-wave{0%,100%{transform:rotate(0)}20%,60%{transform:rotate(-25deg)}40%,80%{transform:rotate(10deg)}}#theme-toggle{position:fixed;bottom:25px;right:25px;z-index:1002;background:var(--bg-primary);border:1px solid var(--border-color);width:48px;height:48px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;box-shadow:0 4px 8px rgba(0,0,0,.15);transition:background-color .3s,border-color .3s}#theme-toggle svg{width:24px;height:24px;stroke:var(--text-primary);transition:all .3s ease}body:not(.dark-mode) #theme-toggle .sun-icon{display:block;fill:none}body:not(.dark-mode) #theme-toggle .moon-icon{display:none}body.dark-mode #theme-toggle .sun-icon{display:none}body.dark-mode #theme-toggle .moon-icon{display:block;fill:var(--text-primary);stroke:var(--text-primary)}
+    .country-drawer{margin-top:25px;}.drawer-toggle{width:100%;padding:15px;background-color:var(--bg-secondary);border:1px solid var(--border-color);border-radius:var(--border-radius-sm);color:var(--text-primary);font-size:1.1rem;font-weight:500;cursor:pointer;text-align:center;transition:background-color .2s,color .2s;position:relative}.drawer-toggle:hover,.drawer-toggle.active{background-color:var(--primary-color);color:#fff;border-color:var(--primary-color)}.drawer-toggle::after{content:'▼';font-size:.7em;position:absolute;right:20px;top:50%;transform:translateY(-50%) rotate(0);transition:transform .3s ease-in-out}.drawer-toggle.active::after{transform:translateY(-50%) rotate(180deg)}.drawer-content{max-height:0;overflow:hidden;transition:max-height .5s ease-in-out,padding .5s ease-in-out;background:var(--bg-secondary);border-radius:var(--border-radius);margin-top:10px;padding:0}.drawer-content.visible{max-height:60vh;overflow-y:auto;padding:20px}.country-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:20px}.country-item{text-align:center}.country-button{display:block;width:100%;padding-top:60%;position:relative;background-size:cover;background-position:center;border:1px solid var(--border-color);border-radius:var(--border-radius-sm);transition:transform .2s,box-shadow .2s;overflow:hidden}.country-button:hover{transform:scale(1.05);box-shadow:0 5px 15px rgba(0,0,0,.1)}.country-name{margin-top:8px;font-size:.9rem;color:var(--text-light);font-weight:500}
+  </style>
+</head>
+<body>
+  <a href="https://github.com/mehdi-hexing/CF-Workers-CheckProxyIP" target="_blank" class="github-corner" aria-label="View source on Github"><svg width="80" height="80" viewBox="0 0 250 250" style="position: absolute; top: 0; border: 0; right: 0;" aria-hidden="true"><path d="M0,0 L115,115 L130,115 L142,142 L250,250 L250,0 Z"></path><path d="M128.3,109.0 C113.8,99.7 119.0,89.6 119.0,89.6 C122.0,82.7 120.5,78.6 120.5,78.6 C119.2,72.0 123.4,76.3 123.4,76.3 C127.3,80.9 125.5,87.3 125.5,87.3 C122.9,97.6 130.6,101.9 134.4,103.2" fill="currentColor" style="transform-origin: 130px 106px;" class="octo-arm"></path><path d="M115.0,115.0 C114.9,115.1 118.7,116.5 119.8,115.4 L133.7,101.6 C136.9,99.2 139.9,98.4 142.2,98.6 C133.8,88.0 127.5,74.4 143.8,58.0 C148.5,53.4 154.0,51.2 159.7,51.0 C160.3,49.4 163.2,43.6 171.4,40.1 C171.4,40.1 176.1,42.5 178.8,56.2 C183.1,58.6 187.2,61.8 190.9,65.4 C194.5,69.0 197.7,73.2 200.1,77.6 C213.8,80.2 216.3,84.9 216.3,84.9 C212.7,93.1 206.9,96.0 205.4,96.6 C205.1,102.4 203.0,107.8 198.3,112.5 C181.9,128.9 168.3,122.5 157.7,114.1 C157.9,116.9 156.7,120.9 152.7,124.9 L141.0,136.5 C139.8,137.7 141.6,141.9 141.8,141.8 Z" fill="currentColor" class="octo-body"></path></svg></a>
+  <div class="container">
+    <header class="header">
+      <h1 class="main-title">Proxy IP Checker</h1>
+    </header>
+    <div class="card">
+      <div class="form-section">
+        <label for="proxyip" class="form-label">Enter IPs, Domains (one per line):</label>
+        <div class="input-wrapper">
+          <textarea id="proxyip" class="form-input" rows="4" placeholder="e.g.,&#10;1.1.1.1&#10;example.com" autocomplete="off"></textarea>
+        </div>
+        <label for="proxyipRangeRows" class="form-label">Enter IP Range(s) (one per line):</label>
+        <div class="input-wrapper">
+          <textarea id="proxyipRangeRows" class="form-input" rows="3" placeholder="e.g.,&#10;1.1.1.0/24&#10;2.2.2.0-255" autocomplete="off"></textarea>
+        </div>
+        <button id="checkBtn" class="btn-primary">
+            <span style="display: flex; align-items: center; justify-content: center;">
+                <span class="btn-text">Check</span>
+                <span class="loading-spinner"></span>
+            </span>
+        </button>
+      </div>
+      <div id="result" class="result-section"></div>
+      <div id="rangeResultCard" class="result-card result-section" style="display:none;">
+         <h3>Successful IPs in Range</h3>
+         <div id="rangeResultSummary" style="margin-bottom: 10px;"></div>
+         <div id="successfulRangeIPsList" class="domain-ip-list"></div>
+         <button id="copyRangeBtn" class="btn-primary" style="display:none; margin-top: 15px; width: 100%;">Copy Successful IPs</button>
+      </div>
+    </div>
+    <div class="country-drawer">
+        <button id="drawer-toggle" class="drawer-toggle">Select From Country List</button>
+        <div id="drawer-content" class="drawer-content">
+            <div class="country-grid">
+                ${countryButtonsHTML}
+            </div>
+        </div>
+    </div>
+    <div class="api-docs">
+       <h3 style="margin-bottom:15px; text-align:center;">API Documentation</h3>
+       <p><code>GET /api/check?proxyip=YOUR_IP</code></p>
+       <p><code>GET /api/resolve?domain=YOUR_DOMAIN</code></p>
+       <p><code>GET /api/ip-info?ip=TARGET_IP</code></p>
+       <p><code>GET /api/check_file?url=FILE_URL</code></p>
+       <hr style="border:0; border-top: 1px solid var(--border-color); margin: 20px 0;"/>
+       <h4 style="margin-bottom:15px; text-align:center;">Direct URL Usage</h4>
+       <p><code>/proxyip/1.1.1.1,8.8.8.8,...</code></p>
+       <p><code>/file/https://path.to/your/file.txt</code></p>
+       <p><code>/iprange/1.1.1.0-255,...</code></p>
+    </div>
+    <footer class="footer">
+      <p>© ${year} Proxy IP Checker - By <strong>mehdi-hexing</strong></p>
+    </footer>
+  </div>
+  <div id="toast" class="toast"></div>
+  <button id="theme-toggle" aria-label="Toggle Theme">
+    <svg class="sun-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+    <svg class="moon-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="0.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+  </button>
+  <script src="/client.js"></script>
+</body>
+</html>`;
+}
+
+// --- Main Fetch Handler ---
 export default {
     async fetch(request, env, ctx) {
         const url = new URL(request.url);
@@ -706,67 +819,6 @@ export default {
         const UA = request.headers.get('User-Agent') || 'null';
         const hostname = url.hostname;
         
-        if (path.toLowerCase().startsWith('/api/')) {
-            const endpoint = path.substring(5);
-            const timestampForToken = Math.ceil(new Date().getTime() / (1000 * 60 * 31));
-            const temporaryTOKEN = await doubleHash(hostname + timestampForToken + UA);
-            const permanentTOKEN = env.TOKEN || temporaryTOKEN;
-            
-            const isTokenValid = () => {
-                if (!env.TOKEN) return true;
-                const providedToken = url.searchParams.get('token');
-                return providedToken === permanentTOKEN || providedToken === temporaryTOKEN;
-            };
-            
-            if (endpoint === 'get-token') {
-                return new Response(JSON.stringify({ token: temporaryTOKEN }), { headers: { "Content-Type": "application/json" } });
-            }
-
-            if (!isTokenValid()) {
-                return new Response(JSON.stringify({ status: "error", message: "Invalid TOKEN" }), {
-                    status: 403, headers: { "Content-Type": "application/json" }
-                });
-            }
-
-            if (endpoint === 'check') {
-                const proxyIPInput = url.searchParams.get('proxyip');
-                if (!proxyIPInput) return new Response(JSON.stringify({success: false, error: 'Missing proxyip parameter'}), { status: 400, headers: { "Content-Type": "application/json" }});
-                const result = await checkProxyIP(proxyIPInput);
-                return new Response(JSON.stringify(result), { status: 200, headers: { "Content-Type": "application/json" } });
-            }
-            
-            if (endpoint === 'resolve') {
-                const domain = url.searchParams.get('domain');
-                return resolveDomain(domain);
-            }
-
-            if (endpoint === 'ip-info') {
-                let ip = url.searchParams.get('ip') || request.headers.get('CF-Connecting-IP');
-                if (!ip) return new Response(JSON.stringify({success: false, error: 'IP parameter not provided'}), { status: 400, headers: { "Content-Type": "application/json" }});
-                if (ip.includes('[')) ip = ip.replace(/\[|\]/g, '');
-                const data = await getIpInfo(ip);
-                return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });
-            }
-            
-            return new Response(JSON.stringify({success: false, error: 'API route not found'}), { status: 404, headers: { "Content-Type": "application/json" } });
-        }
-        
-        const faviconURL = env.ICO || 'https://github.com/user-attachments/assets/31a6ced0-62b8-429f-a98e-082ea5ac1990';
-
-        if (path.toLowerCase() === '/favicon.ico') {
-            return Response.redirect(faviconURL, 302);
-        }
-        
-        if (path === '/') {
-            return new Response(generateMainHTML(faviconURL), {
-                headers: { "content-type": "text/html;charset=UTF-8" }
-            });
-        }
-        
-        if (path === '/client.js') {
-            return new Response(CLIENT_SCRIPT, { headers: { "Content-Type": "application/javascript;charset=UTF-8" } });
-        }
-
         if (path.toLowerCase().startsWith('/file/') || path.toLowerCase().startsWith('/iprange/') || path.toLowerCase().startsWith('/proxyip/')) {
             const timestamp = Math.ceil(new Date().getTime() / (1000 * 60 * 31));
             const temporaryTOKEN = await doubleHash(hostname + timestamp + UA);
@@ -819,6 +871,107 @@ export default {
                 }
             }
             return new Response(generateClientSideCheckPageHTML({ ...options, ipsToCheck, temporaryTOKEN, pageType, contentHash }), { headers: { 'Content-Type': 'text/html;charset=UTF-8' } });
+        }
+        
+        if (path === '/client.js') {
+            return new Response(CLIENT_SCRIPT, { headers: { "Content-Type": "application/javascript;charset=UTF-8" } });
+        }
+
+        if (path.toLowerCase().startsWith('/api/')) {
+            const timestampForToken = Math.ceil(new Date().getTime() / (1000 * 60 * 31));
+            const temporaryTOKEN = await doubleHash(hostname + timestampForToken + UA);
+            const permanentTOKEN = env.TOKEN || temporaryTOKEN;
+            
+            const isTokenValid = () => {
+                if (!env.TOKEN) return true;
+                const providedToken = url.searchParams.get('token');
+                return providedToken === permanentTOKEN || providedToken === temporaryTOKEN;
+            };
+            
+            if (path.toLowerCase() === '/api/get-token') {
+                return new Response(JSON.stringify({ token: temporaryTOKEN }), { headers: { "Content-Type": "application/json" } });
+            }
+
+            if (!isTokenValid()) {
+                return new Response(JSON.stringify({ status: "error", message: "Invalid TOKEN" }), {
+                    status: 403, headers: { "Content-Type": "application/json" }
+                });
+            }
+
+            if (path.toLowerCase() === '/api/check') {
+                const proxyIPInput = url.searchParams.get('proxyip');
+                if (!proxyIPInput) return new Response(JSON.stringify({success: false, error: 'Missing proxyip parameter'}), { status: 400, headers: { "Content-Type": "application/json" }});
+                const result = await checkProxyIP(proxyIPInput);
+                return new Response(JSON.stringify(result), { status: 200, headers: { "Content-Type": "application/json" } });
+            }
+            
+            if (path.toLowerCase() === '/api/resolve') {
+                const domain = url.searchParams.get('domain');
+                if (!domain) return new Response(JSON.stringify({success: false, error: 'Missing domain parameter'}), { status: 400, headers: { "Content-Type": "application/json" }});
+                try {
+                    const ips = await resolveDomain(domain);
+                    return new Response(JSON.stringify({ success: true, domain, ips }), { headers: { "Content-Type": "application/json" } });
+                } catch (error) {
+                    return new Response(JSON.stringify({ success: false, error: error.message }), { status: 500, headers: { "Content-Type": "application/json" } });
+                }
+            }
+
+            if (path.toLowerCase() === '/api/ip-info') {
+                let ip = url.searchParams.get('ip') || request.headers.get('CF-Connecting-IP');
+                if (!ip) return new Response(JSON.stringify({success: false, error: 'IP parameter not provided'}), { status: 400, headers: { "Content-Type": "application/json" }});
+                if (ip.includes('[')) ip = ip.replace(/\[|\]/g, '');
+                const data = await getIpInfo(ip);
+                return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });
+            }
+
+            // --- NEW API ENDPOINT FOR THE BOT ---
+            if (path.toLowerCase() === '/api/check_file') {
+                const targetUrl = url.searchParams.get('url');
+                if (!targetUrl || !targetUrl.startsWith('http')) {
+                    return new Response(JSON.stringify({ success: false, error: 'Invalid or missing URL parameter' }), { status: 400, headers: { "Content-Type": "application/json" } });
+                }
+                try {
+                    const response = await fetch(targetUrl, { headers: {'User-Agent': 'ProxyChecker/1.0'} });
+                    if (!response.ok) throw new Error(`Fetch failed: ${response.statusText}`);
+                    
+                    const text = await response.text();
+                    const foundIPs = [...new Set([...(text.match(forgivingIPv4Regex) || []), ...(text.match(ipv6Regex) || [])])];
+                    
+                    const ipsToCheck = foundIPs.filter(ip => {
+                        const parts = ip.split(':');
+                        return parts.length === 1 || !isNaN(parseInt(parts[parts.length - 1]));
+                    });
+
+                    const allResults = [];
+                    const batchSize = 20;
+                    for (let i = 0; i < ipsToCheck.length; i += batchSize) {
+                        const batch = ipsToCheck.slice(i, i + batchSize);
+                        const checkPromises = batch.map(ip => checkProxyIP(ip));
+                        const batchResults = await Promise.all(checkPromises);
+                        allResults.push(...batchResults);
+                    }
+                    
+                    const successfulIPs = allResults.filter(r => r.success).map(r => r.proxyIP);
+                    return new Response(JSON.stringify({ success: true, successful_ips: successfulIPs }), { headers: { "Content-Type": "application/json" } });
+
+                } catch (e) {
+                    return new Response(JSON.stringify({ success: false, error: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
+                }
+            }
+            
+            return new Response(JSON.stringify({success: false, error: 'API route not found'}), { status: 404, headers: { "Content-Type": "application/json" } });
+        }
+        
+        const faviconURL = env.ICO || 'https://github.com/user-attachments/assets/31a6ced0-62b8-429f-a98e-082ea5ac1990';
+
+        if (path.toLowerCase() === '/favicon.ico') {
+            return Response.redirect(faviconURL, 302);
+        }
+        
+        if (path === '/') {
+            return new Response(generateMainHTML(faviconURL), {
+                headers: { "content-type": "text/html;charset=UTF-8" }
+            });
         }
         
         return new Response('Not Found', { status: 404 });
