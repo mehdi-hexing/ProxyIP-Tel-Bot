@@ -788,7 +788,7 @@ function generateMainHTML(faviconURL) {
     <div class="api-docs">
        <h3 style="margin-bottom:15px; text-align:center;">URL PATH Documentation</h3>
        <p><code>/proxyip/IP1,IP2,IP3,...</code></p>
-       <p><code>/iprange/127.0.0.0/24,127.0.0.0-225,...</>code</p>
+       <p><code>/iprange/127.0.0.0/24,127.0.0.0-225,...</code></p>
        <p><code>/file/https://your.file/ip1.txt or ip1.csv</code></p>
     </div>
     <footer class="footer">
