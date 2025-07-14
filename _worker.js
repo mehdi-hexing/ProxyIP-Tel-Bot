@@ -69,7 +69,7 @@ async function checkProxyIP(proxyIP) {
   try {
     tcpSocket = connect({ hostname: hostToCheck.replace(/\[|\]/g, ''), port: portRemote });
     const writer = tcpSocket.writable.getWriter();
-    const httpRequest = 'GET /cdn-cgi/trace HTTP/1.1\r\nHost: speed.cloudflare.com\r\nUser-Agent: checkip/diana/\r\nConnection: close\r\n\r\n';
+    const httpRequest = 'GET /cdn-cgi/trace HTTP/1.1\r\nHost: speed.cloudflare.com\r\nUser-Agent: checkip/mehdi/\r\nConnection: close\r\n\r\n';
     await writer.write(new TextEncoder().encode(httpRequest));
 
     const reader = tcpSocket.readable.getReader();
@@ -754,13 +754,13 @@ function generateMainHTML(faviconURL) {
     </header>
     <div class="card">
       <div class="form-section">
-        <label for="proxyip" class="form-label">Enter IPs, Domains (one per line):</label>
+        <label for="proxyip" class="form-label">Enter IPs or Domains (one per line):</label>
         <div class="input-wrapper">
-          <textarea id="proxyip" class="form-input" rows="4" placeholder="e.g.,&#10;1.1.1.1&#10;example.com" autocomplete="off"></textarea>
+          <textarea id="proxyip" class="form-input" rows="4" placeholder="127.0.0.1 or nima.nscl.ir" autocomplete="off"></textarea>
         </div>
         <label for="proxyipRangeRows" class="form-label">Enter IP Range(s) (one per line):</label>
         <div class="input-wrapper">
-          <textarea id="proxyipRangeRows" class="form-input" rows="3" placeholder="e.g.,&#10;1.1.1.0/24&#10;2.2.2.0-255" autocomplete="off"></textarea>
+          <textarea id="proxyipRangeRows" class="form-input" rows="3" placeholder="127.0.0.0/24 or 127.0.0.0-255" autocomplete="off"></textarea>
         </div>
         <button id="checkBtn" class="btn-primary">
             <span style="display: flex; align-items: center; justify-content: center;">
@@ -778,7 +778,7 @@ function generateMainHTML(faviconURL) {
       </div>
     </div>
     <div class="country-drawer">
-        <button id="drawer-toggle" class="drawer-toggle">Select From Country List</button>
+        <button id="drawer-toggle" class="drawer-toggle">Do You Need Proxy IP? Click Here</button>
         <div id="drawer-content" class="drawer-content">
             <div class="country-grid">
                 ${countryButtonsHTML}
@@ -786,16 +786,10 @@ function generateMainHTML(faviconURL) {
         </div>
     </div>
     <div class="api-docs">
-       <h3 style="margin-bottom:15px; text-align:center;">API Documentation</h3>
-       <p><code>GET /api/check?proxyip=YOUR_IP</code></p>
-       <p><code>GET /api/resolve?domain=YOUR_DOMAIN</code></p>
-       <p><code>GET /api/ip-info?ip=TARGET_IP</code></p>
-       <p><code>GET /api/check_file?url=FILE_URL</code></p>
-       <hr style="border:0; border-top: 1px solid var(--border-color); margin: 20px 0;"/>
-       <h4 style="margin-bottom:15px; text-align:center;">Direct URL Usage</h4>
-       <p><code>/proxyip/1.1.1.1,8.8.8.8,...</code></p>
-       <p><code>/file/https://path.to/your/file.txt</code></p>
-       <p><code>/iprange/1.1.1.0-255,...</code></p>
+       <h3 style="margin-bottom:15px; text-align:center;">URL PATH Documentation</h3>
+       <p><code>/proxyip/IP1,IP2,IP3,...</code></p>
+       <p><code>/iprange/127.0.0.0/24,127.0.0.0-225,...</>code</p>
+       <p><code>/file/https://your.file/ip1.txt or ip1.csv</code></p>
     </div>
     <footer class="footer">
       <p>© ${year} Proxy IP Checker - By <strong>mehdi-hexing</strong></p>
