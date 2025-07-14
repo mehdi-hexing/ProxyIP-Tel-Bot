@@ -170,7 +170,7 @@ async def process_ips_in_batches(context: ContextTypes.DEFAULT_TYPE, chat_id: in
 
             for i, chunk in enumerate(successful_chunks):
                 is_first_message = (i == 0)
-                current_title = title if is_first_message else f"**(ادامه...)**"
+                current_title = title if is_first_message else f"**Continuation {title.strip('**')}**"
                 
                 header = f"Checked: {len(test_data['checked_ips'])}/{len(test_data['ips'])} | Successful: {len(test_data['successful'])}"
                 message_parts = [f"**{current_title}**", header, "---"]
@@ -274,7 +274,7 @@ async def run_test_and_post(context: ContextTypes.DEFAULT_TYPE, target_chat_id, 
         
         for i, chunk in enumerate(successful_chunks):
             is_first_message = (i == 0)
-            current_title = title if is_first_message else f"**(ادامه...)**"
+            current_title = title if is_first_message else f"**Continuation {title.strip('**')}**"
             
             message_parts = [f"**{current_title}**", "---"]
             
