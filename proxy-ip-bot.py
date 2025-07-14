@@ -1,5 +1,5 @@
-
-# today 23 Tir 1404 I Completed This Project. NIREvil
+# In 23 Tir of 1404, this project was completed and thanks to Diana for free proxy IPs.
+# 10:30 AM
 
 import os
 import logging
