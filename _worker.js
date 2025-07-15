@@ -709,7 +709,7 @@ function generateMainHTML(faviconURL) {
     'ALL': 'All Countries', 'AE': 'United Arab Emirates', 'AL': 'Albania', 'AM': 'Armenia', 'AR': 'Argentina', 'AT': 'Austria', 'AU': 'Australia', 'AZ': 'Azerbaijan', 'BE': 'Belgium', 'BG': 'Bulgaria', 'BR': 'Brazil', 'CA': 'Canada', 'CH': 'Switzerland', 'CN': 'China', 'CO': 'Colombia', 'CY': 'Cyprus', 'CZ': 'Czech Republic', 'DE': 'Germany', 'DK': 'Denmark', 'EE': 'Estonia', 'ES': 'Spain', 'FI': 'Finland', 'FR': 'France', 'GB': 'United Kingdom', 'GI': 'Gibraltar', 'HK': 'Hong Kong', 'HU': 'Hungary', 'ID': 'Indonesia', 'IE': 'Ireland', 'IL': 'Israel', 'IN': 'India', 'IR': 'Iran', 'IT': 'Italy', 'JP': 'Japan', 'KR': 'South Korea', 'KZ': 'Kazakhstan', 'LT': 'Lithuania', 'LU': 'Luxembourg', 'LV': 'Latvia', 'MD': 'Moldova', 'MX': 'Mexico', 'MY': 'Malaysia', 'NL': 'Netherlands', 'NZ': 'New Zealand', 'PH': 'Philippines', 'PL': 'Poland', 'PR': 'Puerto Rico', 'PT': 'Portugal', 'QA': 'Qatar', 'RO': 'Romania', 'RS': 'Serbia', 'RU': 'Russia', 'SA': 'Saudi Arabia', 'SC': 'Seychelles', 'SE': 'Sweden', 'SG': 'Singapore', 'SK': 'Slovakia', 'TH': 'Thailand', 'TR': 'Turkey', 'TW': 'Taiwan', 'UA': 'Ukraine', 'US': 'United States', 'UZ': 'Uzbekistan', 'VN': 'Vietnam'
   };
 
-  const allCountriesButtonImage = 'https://raw.githubusercontent.com/mehdi-hexing/Get-Github-Achievements/main/527112cc-4097-432b-b30c-0b9657451c5f.jpg';
+  const allCountriesButtonImage = 'https://uploadkon.ir/uploads/ccea15_25527112cc-4097-432b-b30c-0b9657451c5f.jpg';
   const allCountriesURL = `https://raw.githubusercontent.com/NiREvil/vless/main/sub/country_proxies/02_proxies.csv`;
   const countryFileBaseURL = `https://raw.githubusercontent.com/NiREvil/vless/main/sub/country_proxies/`;
 
