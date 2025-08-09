@@ -242,7 +242,7 @@ function generateDomainCheckPageHTML({ domains, temporaryTOKEN }) {
         let totalIPs = 0;
 
         function showToast(message) { const toast = document.getElementById('toast'); toast.textContent = message; toast.classList.add('show'); setTimeout(() => toast.classList.remove('show'), 3000); }
-        function copyToClipboard(text, element) { navigator.clipboard.writeText(text).then(() => { const o = element ? element.textContent : ''; if(element) {element.textContent = 'Copied!'; setTimeout(()=>element.textContent=o, 2000);} else { showToast('Copied!')} }).catch(err => { showToast('Copy failed!'); }); }
+        function copyToClipboard(text, element) { navigator.clipboard.writeText(text).then(() => { const o = element ? element.textContent : ''; if(element) {element.textContent = 'Copied!'; setTimeout(()=>element.textContent=o, 2000);} else { showToast('Copied!')} }).catch(err => { showToast('Copy failed!'); console.error(err); }); }
         function toggleTheme() {
             const body = document.body; body.classList.toggle('dark-mode');
             localStorage.setItem('theme', body.classList.contains('dark-mode') ? 'dark' : 'light');
@@ -335,7 +335,8 @@ function generateDomainCheckPageHTML({ domains, temporaryTOKEN }) {
                  const successfulIPsText = successfulIPs.map(i=>i.ip).join('\\n');
                  const dataUrl = \`data:text/plain;charset=utf-8;base64,\${btoa(unescape(encodeURIComponent(successfulIPsText)))}\`;
                  const downloadButton = \`<a href="\${dataUrl}" download="successful_ips.txt" class="btn btn-secondary">📥 Download Results</a>\`;
-                 actionContainer.innerHTML = \`<div class="action-buttons">\${downloadButton}<button class="btn btn-primary" onclick="copyToClipboard('\${successfulIPsText}')">📋 Copy All</button></div>\`;
+                 // ✅ FIX: Use JSON.stringify to safely embed the text in the onclick attribute
+                 actionContainer.innerHTML = \`<div class="action-buttons">\${downloadButton}<button class="btn btn-primary" onclick='copyToClipboard(\${JSON.stringify(successfulIPsText)})'>📋 Copy All</button></div>\`;
             }
         }
         
@@ -415,7 +416,7 @@ function generateClientSideCheckPageHTML({ title, subtitleLabel, subtitleContent
         let allResults = {};
 
         function showToast(message) { const toast = document.getElementById('toast'); toast.textContent = message; toast.classList.add('show'); setTimeout(() => toast.classList.remove('show'), 3000); }
-        function copyToClipboard(text, element) { navigator.clipboard.writeText(text).then(() => { const o = element ? element.textContent : ''; if(element) {element.textContent = 'Copied!'; setTimeout(()=>element.textContent=o, 2000);} else { showToast('Copied!')} }).catch(err => { showToast('Copy failed!'); }); }
+        function copyToClipboard(text, element) { navigator.clipboard.writeText(text).then(() => { const o = element ? element.textContent : ''; if(element) {element.textContent = 'Copied!'; setTimeout(()=>element.textContent=o, 2000);} else { showToast('Copied!')} }).catch(err => { showToast('Copy failed!'); console.error(err); }); }
         function toggleTheme() {
             const body = document.body; body.classList.toggle('dark-mode');
             localStorage.setItem('theme', body.classList.contains('dark-mode') ? 'dark' : 'light');
@@ -525,7 +526,8 @@ function generateClientSideCheckPageHTML({ title, subtitleLabel, subtitleContent
                     const dataUrl = \`data:text/plain;charset=utf-8;base64,\${btoa(unescape(encodeURIComponent(successfulIPsText)))}\`;
                     downloadButton = \`<a href="\${dataUrl}" download="successful_ips.txt" class="btn btn-secondary">📥 Download Results</a>\`;
                  }
-                 actionContainer.innerHTML = \`<div class="action-buttons">\${downloadButton}<button class="btn btn-primary" onclick="copyToClipboard('\${successfulIPsText}')">📋 Copy All</button></div>\`;
+                 // ✅ FIX: Use JSON.stringify to safely embed the text in the onclick attribute
+                 actionContainer.innerHTML = \`<div class="action-buttons">\${downloadButton}<button class="btn btn-primary" onclick='copyToClipboard(\${JSON.stringify(successfulIPsText)})'>📋 Copy All</button></div>\`;
             }
         }
         
@@ -608,7 +610,7 @@ const CLIENT_SCRIPT = `
             } else {
                  showToast(successMessage);
             }
-        }).catch(err => showToast('Copy failed.'));
+        }).catch(err => { showToast('Copy failed.'); console.error(err); });
     }
 
     function toggleCheckButton(checking) {
@@ -736,6 +738,7 @@ const CLIENT_SCRIPT = `
         }
     }
     
+    // ✅ NEW AND IMPROVED FUNCTION
     async function checkAndDisplayDomain_graphical(domain) {
         const resultDiv = document.getElementById('result');
         resultDiv.innerHTML = '<div class="result-card"><p style="text-align:center;">Resolving & Checking...</p></div>';
@@ -755,6 +758,8 @@ const CLIENT_SCRIPT = `
             const ipListDiv = resultCard.querySelector('.domain-ip-list');
 
             let successCount = 0;
+            const successfulIPs = []; // Array to hold successful IPs
+
             const checkPromises = ips.map(async (ip, index) => {
                 const ipItem = document.createElement('div');
                 ipItem.className = 'ip-item-multi';
@@ -766,6 +771,7 @@ const CLIENT_SCRIPT = `
                     const statusSpan = document.getElementById(\`status-\${index}\`);
                     if (checkData.success) {
                         successCount++;
+                        successfulIPs.push(checkData.proxyIP); // Add successful IP to the array
                         const ipInfo = await fetchAPI('/ip-info', new URLSearchParams({ ip: ip }));
                         statusSpan.innerHTML = \`✅ (\${ipInfo.country || 'N/A'} - \${ipInfo.as || 'N/A'})\`;
                     } else {
@@ -781,12 +787,21 @@ const CLIENT_SCRIPT = `
             resultCard.classList.add(successCount > 0 ? 'result-success' : 'result-error');
             resultCard.querySelector('h3').innerHTML = \`\${successCount > 0 ? '✅' : '❌'} \${successCount} of \${ips.length} IPs are valid for \${domain}\`;
 
+            // Add the copy all button if there are successful IPs
+            if (successfulIPs.length > 0) {
+                const textToCopy = successfulIPs.join('\\n');
+                // ✅ FIX: Use JSON.stringify to safely embed the text in the onclick attribute
+                const actionButtonHTML = \`<div class="action-buttons"><button class="btn btn-primary" onclick='copyToClipboard(\${JSON.stringify(textToCopy)})'>📋 Copy All Successful IPs</button></div>\`;
+                resultCard.insertAdjacentHTML('beforeend', actionButtonHTML);
+            }
+
         } catch (error) {
             resultCard.className = 'result-card result-error';
             resultCard.innerHTML = \`<h3>❌ Error</h3><p>\${error.message}</p>\`;
         }
     }
     
+    // ✅ NEW AND IMPROVED FUNCTION
     async function processMultipleInputs(mainInputs) {
         const resultDiv = document.getElementById('result');
         resultDiv.innerHTML = '<div class="result-card"><p style="text-align:center; padding: 20px;">Processing...</p></div>';
@@ -848,7 +863,9 @@ const CLIENT_SCRIPT = `
         }
 
         if (successfulIPs.length > 0) {
-            const actionButtonHTML = \`<div class="action-buttons"><button class="btn btn-primary" onclick="copyToClipboard('\${successfulIPs.map(i=>i.ip).join('\\n')}')">📋 Copy All Successful IPs</button></div>\`;
+            const textToCopy = successfulIPs.map(i => i.ip).join('\\n');
+            // ✅ FIX: Use JSON.stringify to safely embed the text in the onclick attribute
+            const actionButtonHTML = \`<div class="action-buttons"><button class="btn btn-primary" onclick='copyToClipboard(\${JSON.stringify(textToCopy)})'>📋 Copy All Successful IPs</button></div>\`;
             mainCard.insertAdjacentHTML('beforeend', actionButtonHTML);
         }
     }
@@ -922,28 +939,28 @@ function generateMainHTML(faviconURL) {
   };
 
   const allCountriesButtonImage = 'https://uploadkon.ir/uploads/ccea15_25527112cc-4097-432b-b30c-0b9657451c5f.jpg';
-  const allCountriesURL = `https://raw.githubusercontent.com/NiREvil/vless/main/sub/country_proxies/02_proxies.csv`;
-  const countryFileBaseURL = `https://raw.githubusercontent.com/NiREvil/vless/main/sub/country_proxies/`;
+  const allCountriesURL = \`https://raw.githubusercontent.com/NiREvil/vless/main/sub/country_proxies/02_proxies.csv\`;
+  const countryFileBaseURL = \`https://raw.githubusercontent.com/NiREvil/vless/main/sub/country_proxies/\`;
 
-  let countryButtonsHTML = `
+  let countryButtonsHTML = \`
     <div class="country-item">
         <a href="/file/${encodeURIComponent(allCountriesURL)}" class="country-button" style="background-image: url('${allCountriesButtonImage}');"></a>
         <p class="country-name">${countries['ALL']}</p>
     </div>
-  `;
+  \`;
   
   for (const code in countries) {
       if (code === 'ALL') continue;
-      const fileUrl = `${countryFileBaseURL}${code.toUpperCase()}.txt`;
-      countryButtonsHTML += `
+      const fileUrl = \`${countryFileBaseURL}${code.toUpperCase()}.txt\`;
+      countryButtonsHTML += \`
         <div class="country-item">
             <a href="/file/${encodeURIComponent(fileUrl)}" class="country-button" style="background-image: url('https://flagcdn.com/${code.toLowerCase()}.svg');"></a>
             <p class="country-name">${countries[code]}</p>
         </div>
-      `;
+      \`;
   }
 
-  return `<!DOCTYPE html>
+  return \`<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -1015,7 +1032,7 @@ function generateMainHTML(faviconURL) {
   </button>
   <script src="/client.js"></script>
 </body>
-</html>`;
+</html>\`;
 }
 
 // --- Main Fetch Handler ---
@@ -1070,7 +1087,7 @@ export default {
                 if (!targetUrl || !targetUrl.startsWith('http')) return new Response('Invalid URL', {status: 400});
                  try {
                     const response = await fetch(targetUrl, { headers: {'User-Agent': 'ProxyChecker/1.0'} });
-                    if (!response.ok) throw new Error(`Fetch failed: ${response.statusText}`);
+                    if (!response.ok) throw new Error(\`Fetch failed: \${response.statusText}\`);
                     const text = await response.text();
                     contentHash = simpleHash(text);
                     const foundIPs = [...new Set([...(text.match(forgivingIPv4Regex) || []), ...(text.match(ipv6Regex) || [])])];
@@ -1084,7 +1101,7 @@ export default {
                         subtitleContent: targetUrl,
                     };
                 } catch(e) {
-                    return new Response(`Error processing file: ${e.message}`, { status: 500 });
+                    return new Response(\`Error processing file: \${e.message}\`, { status: 500 });
                 }
             }
             return new Response(generateClientSideCheckPageHTML({ ...options, ipsToCheck, temporaryTOKEN, pageType, contentHash }), { headers: { 'Content-Type': 'text/html;charset=UTF-8' } });
@@ -1148,7 +1165,7 @@ export default {
                 }
                 try {
                     const response = await fetch(targetUrl, { headers: {'User-Agent': 'ProxyChecker/1.0'} });
-                    if (!response.ok) throw new Error(`Fetch failed: ${response.statusText}`);
+                    if (!response.ok) throw new Error(\`Fetch failed: \${response.statusText}\`);
                     
                     const text = await response.text();
                     const foundIPs = [...new Set([...(text.match(forgivingIPv4Regex) || []), ...(text.match(ipv6Regex) || [])])];
