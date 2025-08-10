@@ -265,13 +265,13 @@ function generateDomainCheckPageHTML({ domains, temporaryTOKEN }) {
             const detailsParts = [];
             if (item.info && item.info.country) detailsParts.push(item.info.country);
             if (item.info && item.info.as) detailsParts.push(item.info.as);
-            const detailsText = detailsParts.length > 0 ? `(${detailsParts.join(' - ')})` : '';
-            const itemHTML = `<div class="ip-item"><span class="ip-tag" onclick="copyToClipboard('${item.ip}', this)">${item.ip}</span><span class="ip-details">${detailsText}</span></div>`;
+            const detailsText = detailsParts.length > 0 ? \`(\${detailsParts.join(' - ')})\` : '';
+            const itemHTML = \`<div class="ip-item"><span class="ip-tag" onclick="copyToClipboard('\${item.ip}', this)">\${item.ip}</span><span class="ip-details">\${detailsText}</span></div>\`;
             container.insertAdjacentHTML('beforeend', itemHTML);
         }
 
         function updateSummary() {
-            document.getElementById('summary').textContent = `Checked: ${checkedCount} / ${totalIPs} | Successful: ${successfulIPs.length}`;
+            document.getElementById('summary').textContent = \`Checked: \${checkedCount} / \${totalIPs} | Successful: \${successfulIPs.length}\`;
         }
 
         async function startChecking() {
@@ -324,7 +324,7 @@ function generateDomainCheckPageHTML({ domains, temporaryTOKEN }) {
                 updateSummary();
             }
 
-            document.title = `${successfulIPs.length} Successful IPs Found`;
+            document.title = \`\${successfulIPs.length} Successful IPs Found\`;
             const actionContainer = document.getElementById('action-buttons-container');
             if (successfulIPs.length === 0) {
                  if (checkedCount >= totalIPs) {
@@ -332,10 +332,9 @@ function generateDomainCheckPageHTML({ domains, temporaryTOKEN }) {
                  }
             } else {
                  const successfulIPsText = successfulIPs.map(i=>i.ip).join('\\n');
-                 const dataUrl = `data:text/plain;charset=utf-8;base64,${btoa(unescape(encodeURIComponent(successfulIPsText)))}`;
-                 const downloadButton = `<a href="${dataUrl}" download="successful_ips.txt" class="btn btn-secondary">📥 Download Results</a>`;
-                 // ✅ FIX: Use JSON.stringify to safely embed the text in the onclick attribute
-                 actionContainer.innerHTML = `<div class="action-buttons">${downloadButton}<button class="btn btn-primary" onclick='copyToClipboard(${JSON.stringify(successfulIPsText)})'>📋 Copy All</button></div>`;
+                 const dataUrl = \`data:text/plain;charset=utf-8;base64,\${btoa(unescape(encodeURIComponent(successfulIPsText)))}\`;
+                 const downloadButton = \`<a href="\${dataUrl}" download="successful_ips.txt" class="btn btn-secondary">📥 Download Results</a>\`;
+                 actionContainer.innerHTML = \`<div class="action-buttons">\${downloadButton}<button class="btn btn-primary" onclick='copyToClipboard(\${JSON.stringify(successfulIPsText)})'>📋 Copy All</button></div>\`;
             }
         }
         
@@ -438,13 +437,13 @@ function generateClientSideCheckPageHTML({ title, subtitleLabel, subtitleContent
             const detailsParts = [];
             if (item.info && item.info.country) detailsParts.push(item.info.country);
             if (item.info && item.info.as) detailsParts.push(item.info.as);
-            const detailsText = detailsParts.length > 0 ? `(${detailsParts.join(' - ')})` : '';
-            const itemHTML = `<div class="ip-item"><span class="ip-tag" onclick="copyToClipboard('${item.ip}', this)">${item.ip}</span><span class="ip-details">${detailsText}</span></div>`;
+            const detailsText = detailsParts.length > 0 ? \`(\${detailsParts.join(' - ')})\` : '';
+            const itemHTML = \`<div class="ip-item"><span class="ip-tag" onclick="copyToClipboard('\${item.ip}', this)">\${item.ip}</span><span class="ip-details">\${detailsText}</span></div>\`;
             container.insertAdjacentHTML('beforeend', itemHTML);
         }
 
         function updateSummary() {
-            document.getElementById('summary').textContent = `Checked: ${checkedCount} / ${ipsToCheck.length} | Successful: ${successfulIPs.length}`;
+            document.getElementById('summary').textContent = \`Checked: \${checkedCount} / \${ipsToCheck.length} | Successful: \${successfulIPs.length}\`;
         }
         
         function loadSavedResults() {
@@ -473,7 +472,7 @@ function generateClientSideCheckPageHTML({ title, subtitleLabel, subtitleContent
         }
 
         async function startChecking() {
-            document.title = `Checking ${ipsToCheck.length} IPs...`;
+            document.title = \`Checking \${ipsToCheck.length} IPs...\`;
             
             loadSavedResults();
 
@@ -511,7 +510,7 @@ function generateClientSideCheckPageHTML({ title, subtitleLabel, subtitleContent
                 updateSummary();
             }
 
-            document.title = `${successfulIPs.length} Successful IPs Found`;
+            document.title = \`\${successfulIPs.length} Successful IPs Found\`;
             const actionContainer = document.getElementById('action-buttons-container');
             if (successfulIPs.length === 0) {
                  if (Object.keys(allResults).length >= ipsToCheck.length) {
@@ -521,11 +520,10 @@ function generateClientSideCheckPageHTML({ title, subtitleLabel, subtitleContent
                  let downloadButton = '';
                  const successfulIPsText = successfulIPs.map(i=>i.ip).join('\\n');
                  if (pageType === 'file') {
-                    const dataUrl = `data:text/plain;charset=utf-8;base64,${btoa(unescape(encodeURIComponent(successfulIPsText)))}`;
-                    downloadButton = `<a href="${dataUrl}" download="successful_ips.txt" class="btn btn-secondary">📥 Download Results</a>`;
+                    const dataUrl = \`data:text/plain;charset=utf-8;base64,\${btoa(unescape(encodeURIComponent(successfulIPsText)))}\`;
+                    downloadButton = \`<a href="\${dataUrl}" download="successful_ips.txt" class="btn btn-secondary">📥 Download Results</a>\`;
                  }
-                 // ✅ FIX: Use JSON.stringify to safely embed the text in the onclick attribute
-                 actionContainer.innerHTML = `<div class="action-buttons">${downloadButton}<button class="btn btn-primary" onclick='copyToClipboard(${JSON.stringify(successfulIPsText)})'>📋 Copy All</button></div>`;
+                 actionContainer.innerHTML = \`<div class="action-buttons">\${downloadButton}<button class="btn btn-primary" onclick='copyToClipboard(\${JSON.stringify(successfulIPsText)})'>📋 Copy All</button></div>\`;
             }
         }
         
@@ -644,24 +642,24 @@ const CLIENT_SCRIPT = `
         return response.json();
     }
 
-    const isIPAddress = (input) => /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/.test(input.split(':')[0].replace(/[\\[\\]]/g, ''));
-    const isDomain = (input) => /^(?!-)[a-zA-Z0-9-]+([\-\.]{1}[a-zA-Z0-9]+)*\.[a-zA-Z]{2,}$/.test(input.split(':')[0]);
-    const isIPRange = (input) => /^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\/24$/.test(input) || /^(\d{1,3}\.\d{1,3}\.\d{1,3}\.)(\d{1,3})-(\d{1,3})$/.test(input);
+    const isIPAddress = (input) => /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/.test(input.split(':')[0].replace(/[\\[\\]]/g, ''));
+    const isDomain = (input) => /^(?!-)[a-zA-Z0-9-]+([\\-\\.]{1}[a-zA-Z0-9]+)*\\.[a-zA-Z]{2,}\$/.test(input.split(':')[0]);
+    const isIPRange = (input) => /^(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})\\/24$/.test(input) || /^(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.)(\\d{1,3})-(\\d{1,3})$/.test(input);
 
     function parseIPRange(rangeInput) {
         const ips = [];
-        const cidrMatch = rangeInput.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\/24$/);
-        const rangeMatch = rangeInput.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.)(\d{1,3})-(\d{1,3})$/);
+        const cidrMatch = rangeInput.match(/^(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})\\/24$/);
+        const rangeMatch = rangeInput.match(/^(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.)(\\d{1,3})-(\\d{1,3})$/);
 
         if (cidrMatch) {
             const prefix = cidrMatch[1].substring(0, cidrMatch[1].lastIndexOf('.'));
-            for (let i = 0; i <= 255; i++) ips.push(\`\${prefix}.${i}\`);
+            for (let i = 0; i <= 255; i++) ips.push(\`\${prefix}.\${i}\`);
         } else if (rangeMatch) {
             const prefix = rangeMatch[1];
             const start = parseInt(rangeMatch[2], 10);
             const end = parseInt(rangeMatch[3], 10);
             if (!isNaN(start) && !isNaN(end) && start <= end) {
-                for (let i = start; i <= end; i++) ips.push(\`\${prefix}${i}\`);
+                for (let i = start; i <= end; i++) ips.push(\`\${prefix}\${i}\`);
             }
         }
         return ips;
@@ -785,7 +783,6 @@ const CLIENT_SCRIPT = `
 
             if (successfulIPs.length > 0) {
                 const textToCopy = successfulIPs.join('\\n');
-                // ✅ FIX: Use JSON.stringify to safely embed the text in the onclick attribute
                 const actionButtonHTML = \`<div class="action-buttons"><button class="btn btn-primary" onclick='copyToClipboard(\${JSON.stringify(textToCopy)})'>📋 Copy All Successful IPs</button></div>\`;
                 resultCard.insertAdjacentHTML('beforeend', actionButtonHTML);
             }
@@ -858,7 +855,6 @@ const CLIENT_SCRIPT = `
 
         if (successfulIPs.length > 0) {
             const textToCopy = successfulIPs.map(i => i.ip).join('\\n');
-            // ✅ FIX: Use JSON.stringify to safely embed the text in the onclick attribute
             const actionButtonHTML = \`<div class="action-buttons"><button class="btn btn-primary" onclick='copyToClipboard(\${JSON.stringify(textToCopy)})'>📋 Copy All Successful IPs</button></div>\`;
             mainCard.insertAdjacentHTML('beforeend', actionButtonHTML);
         }
@@ -1000,7 +996,7 @@ function generateMainHTML(faviconURL) {
       </div>
     </div>
     <div class="country-drawer">
-        <button id="drawer-toggle" class="drawer-toggle">Do You Need ProxyIP? Click Here</button>
+        <button id="drawer-toggle" class="drawer-toggle">Do You Need Proxy IP? Click Here</button>
         <div id="drawer-content" class="drawer-content">
             <div class="country-grid">
                 ${countryButtonsHTML}
@@ -1010,9 +1006,9 @@ function generateMainHTML(faviconURL) {
     <div class="api-docs">
        <h3 style="margin-bottom:15px; text-align:center;">URL PATH Documentation</h3>
        <p><code>/proxyip/IP1,IP2,IP3,...</code></p>
-       <p><code>/iprange/127.0.0.0/24,... or 127.0.0.0-255,...</code></p>
+       <p><code>/iprange/127.0.0.0/24,127.0.0.0-225,...</code></p>
        <p><code>/file/https://your.file/ip1.txt or ip1.csv</code></p>
-       <p><code>/domain/domain1.com,domain2.com,...</code></p>
+        <p><code>/domain/domain1.com,domain2.com,...</code></p>
     </div>
     <footer class="footer">
       <p>© ${year} Proxy IP Checker - By <strong>mehdi-hexing</strong></p>
@@ -1027,7 +1023,6 @@ function generateMainHTML(faviconURL) {
 </body>
 </html>`;
 }
-
 
 // --- Main Fetch Handler ---
 export default {
@@ -1151,6 +1146,40 @@ export default {
                 if (ip.includes('[')) ip = ip.replace(/\[|\]/g, '');
                 const data = await getIpInfo(ip);
                 return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });
+            }
+
+            if (path.toLowerCase() === '/api/check_file') {
+                const targetUrl = url.searchParams.get('url');
+                if (!targetUrl || !targetUrl.startsWith('http')) {
+                    return new Response(JSON.stringify({ success: false, error: 'Invalid or missing URL parameter' }), { status: 400, headers: { "Content-Type": "application/json" } });
+                }
+                try {
+                    const response = await fetch(targetUrl, { headers: {'User-Agent': 'ProxyChecker/1.0'} });
+                    if (!response.ok) throw new Error(`Fetch failed: ${response.statusText}`);
+                    
+                    const text = await response.text();
+                    const foundIPs = [...new Set([...(text.match(forgivingIPv4Regex) || []), ...(text.match(ipv6Regex) || [])])];
+                    
+                    const ipsToCheck = foundIPs.filter(ip => {
+                        const parts = ip.split(':');
+                        return parts.length === 1 || !isNaN(parseInt(parts[parts.length - 1]));
+                    });
+
+                    const allResults = [];
+                    const batchSize = 20;
+                    for (let i = 0; i < ipsToCheck.length; i += batchSize) {
+                        const batch = ipsToCheck.slice(i, i + batchSize);
+                        const checkPromises = batch.map(ip => checkProxyIP(ip));
+                        const batchResults = await Promise.all(checkPromises);
+                        allResults.push(...batchResults);
+                    }
+                    
+                    const successfulIPs = allResults.filter(r => r.success).map(r => r.proxyIP);
+                    return new Response(JSON.stringify({ success: true, successful_ips: successfulIPs }), { headers: { "Content-Type": "application/json" } });
+
+                } catch (e) {
+                    return new Response(JSON.stringify({ success: false, error: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
+                }
             }
             
             return new Response(JSON.stringify({success: false, error: 'API route not found'}), { status: 404, headers: { "Content-Type": "application/json" } });
