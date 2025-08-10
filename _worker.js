@@ -939,8 +939,8 @@ function generateMainHTML(faviconURL) {
   };
 
   const allCountriesButtonImage = 'https://uploadkon.ir/uploads/ccea15_25527112cc-4097-432b-b30c-0b9657451c5f.jpg';
-  const allCountriesURL = \`https://raw.githubusercontent.com/NiREvil/vless/main/sub/country_proxies/02_proxies.csv\`;
-  const countryFileBaseURL = \`https://raw.githubusercontent.com/NiREvil/vless/main/sub/country_proxies/\`;
+  const allCountriesURL = `https://raw.githubusercontent.com/NiREvil/vless/main/sub/country_proxies/02_proxies.csv`;
+  const countryFileBaseURL = `https://raw.githubusercontent.com/NiREvil/vless/main/sub/country_proxies/`;
 
   let countryButtonsHTML = \`
     <div class="country-item">
@@ -1210,4 +1210,5 @@ export default {
         return new Response('Not Found', { status: 404 });
     }
 };
+
 
