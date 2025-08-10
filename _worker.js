@@ -854,7 +854,7 @@ const CLIENT_SCRIPT = `
 
         if (successfulIPs.length > 0) {
             ipListContainer.innerHTML = '<h2>Successful IPs</h2>' + successfulIPs.map(item => {
-                const details = \`(\${item.info.country || 'N/A'} - \${item.info.as || 'N/A'})\`;
+                const details = `(\${item.info.country || 'N/A'} - \${item.info.as || 'N/A'})`;
                 const prefix = item.domainIndex > -1 ? \`\${formatNumber(item.domainIndex + 1)} \` : '';
                 return \`<div class="ip-item-multi"><div>\${prefix}<span class="ip-tag" data-copy="\${item.ip}">\${item.ip}</span></div><span class="ip-details">\${details}</span></div>\`;
             }).join('');
@@ -909,7 +909,7 @@ const CLIENT_SCRIPT = `
                     .catch(err => { checkedCount++; })
             );
             await Promise.all(batchPromises);
-            summaryDiv.innerHTML = \`Tested: \${checkedCount}/\${allIPsToTest.length} | Successful: \${successCount}\`;
+            summaryDiv.innerHTML = `Tested: \${checkedCount}/\${allIPsToTest.length} | Successful: \${successCount}`;
             updateSuccessfulRangeIPsDisplay();
         }
         
@@ -942,22 +942,22 @@ function generateMainHTML(faviconURL) {
   const allCountriesURL = `https://raw.githubusercontent.com/NiREvil/vless/main/sub/country_proxies/02_proxies.csv`;
   const countryFileBaseURL = `https://raw.githubusercontent.com/NiREvil/vless/main/sub/country_proxies/`;
 
-  let countryButtonsHTML = \`
+  let countryButtonsHTML = `
     <div class="country-item">
         <a href="/file/${encodeURIComponent(allCountriesURL)}" class="country-button" style="background-image: url('${allCountriesButtonImage}');"></a>
         <p class="country-name">${countries['ALL']}</p>
     </div>
-  \`;
+  `;
   
   for (const code in countries) {
       if (code === 'ALL') continue;
-      const fileUrl = \`${countryFileBaseURL}${code.toUpperCase()}.txt\`;
-      countryButtonsHTML += \`
+      const fileUrl = `${countryFileBaseURL}${code.toUpperCase()}.txt`;
+      countryButtonsHTML += `
         <div class="country-item">
             <a href="/file/${encodeURIComponent(fileUrl)}" class="country-button" style="background-image: url('https://flagcdn.com/${code.toLowerCase()}.svg');"></a>
             <p class="country-name">${countries[code]}</p>
         </div>
-      \`;
+      `;
   }
 
   return \`<!DOCTYPE html>
@@ -1210,5 +1210,6 @@ export default {
         return new Response('Not Found', { status: 404 });
     }
 };
+
 
 
