@@ -1,4 +1,4 @@
-# In 23 Tir of 1404, this project was completed and thanks to Diana for free proxy IPs.
+# In 23 Tir of 1404, this project was completed and thanks to Dìana For Free Proxy IPs.
 # 10:30 AM
 
 import os
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 # --- Constants ---
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-WORKER_URL = "https://YourProxyIPChecker.pages.dev"
+WORKER_URL = "https://check80.pages.dev"
 DB_FILE = "bot_data.json"
 MESSAGE_ENTITY_LIMIT = 45
 
@@ -34,13 +34,14 @@ AWAIT_MAIN_INPUT = 0
 SELECT_ADD_TYPE, AWAIT_CHAT_ID, AWAIT_ADD_CONFIRMATION, AWAIT_CHAT_NAME = range(1, 5)
 SELECT_TARGET_CHAT, SELECT_COMMAND, AWAIT_COMMAND_INPUT, AWAIT_POST_COUNTRY = range(5, 9)
 SELECT_CHAT_TO_DELETE, CONFIRM_DELETION = range(9, 11)
+AWAIT_DOMAIN_CORRECTION = 11
 
 COUNTRIES = {
-    'ALL': 'ðŸŒ All Countries', 'AE': 'ðŸ‡¦ðŸ‡ª UAE', 'AL': 'ðŸ‡¦ðŸ‡± Albania', 'AM': 'ðŸ‡¦ðŸ‡² Armenia', 'AR': 'ðŸ‡¦ðŸ‡· Argentina', 'AT': 'ðŸ‡¦ðŸ‡¹ Austria', 'AU': 'ðŸ‡¦ðŸ‡º Australia', 'AZ': 'ðŸ‡¦ðŸ‡¿ Azerbaijan', 'BE': 'ðŸ‡§ðŸ‡ª Belgium', 'BG': 'ðŸ‡§ðŸ‡¬ Bulgaria', 'BR': 'ðŸ‡§ðŸ‡· Brazil', 'CA': 'ðŸ‡¨ðŸ‡¦ Canada', 'CH': 'ðŸ‡¨ðŸ‡­ Switzerland', 'CN': 'ðŸ‡¨ðŸ‡³ China', 'CO': 'ðŸ‡¨ðŸ‡´ Colombia', 'CY': 'ðŸ‡¨ðŸ‡¾ Cyprus', 'CZ': 'ðŸ‡¨ðŸ‡¿ Czechia', 'DE': 'ðŸ‡©ðŸ‡ª Germany', 'DK': 'ðŸ‡©ðŸ‡° Denmark', 'EE': 'ðŸ‡ªðŸ‡ª Estonia', 'ES': 'ðŸ‡ªðŸ‡¸ Spain', 'FI': 'ðŸ‡«ðŸ‡® Finland', 'FR': 'ðŸ‡«ðŸ‡· France', 'GB': 'ðŸ‡¬ðŸ‡§ UK', 'GI': 'ðŸ‡¬ðŸ‡® Gibraltar', 'HK': 'ðŸ‡­ðŸ‡° Hong Kong', 'HU': 'ðŸ‡­ðŸ‡º Hungary', 'ID': 'ðŸ‡®ðŸ‡© Indonesia', 'IE': 'ðŸ‡®ðŸ‡ª Ireland', 'IL': 'ðŸ‡®ðŸ‡± Israel', 'IN': 'ðŸ‡®ðŸ‡³ India', 'IR': 'ðŸ‡®ðŸ‡· Iran', 'IT': 'ðŸ‡®ðŸ‡¹ Italy', 'JP': 'ðŸ‡¯ðŸ‡µ Japan', 'KR': 'ðŸ‡°ðŸ‡· South Korea', 'KZ': 'ðŸ‡°ðŸ‡¿ Kazakhstan', 'LT': 'ðŸ‡±ðŸ‡¹ Lithuania', 'LU': 'ðŸ‡±ðŸ‡º Luxembourg', 'LV': 'ðŸ‡±ðŸ‡» Latvia', 'MD': 'ðŸ‡²ðŸ‡© Moldova', 'MX': 'ðŸ‡²ðŸ‡½ Mexico', 'MY': 'ðŸ‡²ðŸ‡¾ Malaysia', 'NL': 'ðŸ‡³ðŸ‡± Netherlands', 'NZ': 'ðŸ‡³ðŸ‡¿ New Zealand', 'PH': 'ðŸ‡µðŸ‡­ Philippines', 'PL': 'ðŸ‡µðŸ‡± Poland', 'PR': 'ðŸ‡µðŸ‡· Puerto Rico', 'PT': 'ðŸ‡µðŸ‡¹ Portugal', 'QA': 'ðŸ‡¶ðŸ‡¦ Qatar', 'RO': 'ðŸ‡·ðŸ‡´ Romania', 'RS': 'ðŸ‡·ðŸ‡¸ Serbia', 'RU': 'ðŸ‡·ðŸ‡º Russia', 'SA': 'ðŸ‡¸ðŸ‡¦ Saudi Arabia', 'SC': 'ðŸ‡¸ðŸ‡¨ Seychelles', 'SE': 'ðŸ‡¸ðŸ‡ª Sweden', 'SG': 'ðŸ‡¸ðŸ‡¬ Singapore', 'SK': 'ðŸ‡¸ðŸ‡° Slovakia', 'TH': 'ðŸ‡¹ðŸ‡­ Thailand', 'TR': 'ðŸ‡¹ðŸ‡· Turkey', 'TW': 'ðŸ‡¹ðŸ‡¼ Taiwan', 'UA': 'ðŸ‡ºðŸ‡¦ Ukraine', 'US': 'ðŸ‡ºðŸ‡¸ USA', 'UZ': 'ðŸ‡ºðŸ‡¿ Uzbekistan', 'VN': 'ðŸ‡»ðŸ‡³ Vietnam'
+    'ALL': '🌐 All Countries', 'AE': '🇦🇪 UAE', 'AL': '🇦🇱 Albania', 'AM': '🇦🇲 Armenia', 'AR': '🇦🇷 Argentina', 'AT': '🇦🇹 Austria', 'AU': '🇦🇺 Australia', 'AZ': '🇦🇿 Azerbaijan', 'BE': '🇧🇪 Belgium', 'BG': '🇧🇬 Bulgaria', 'BR': '🇧🇷 Brazil', 'CA': '🇨🇦 Canada', 'CH': '🇨🇭 Switzerland', 'CN': '🇨🇳 China', 'CO': '🇨🇴 Colombia', 'CY': '🇨🇾 Cyprus', 'CZ': '🇨🇿 Czechia', 'DE': '🇩🇪 Germany', 'DK': '🇩🇰 Denmark', 'EE': '🇪🇪 Estonia', 'ES': '🇪🇸 Spain', 'FI': '🇫🇮 Finland', 'FR': '🇫🇷 France', 'GB': '🇬🇧 UK', 'GI': '🇬🇮 Gibraltar', 'HK': '🇭🇰 Hong Kong', 'HU': '🇭🇺 Hungary', 'ID': '🇮🇩 Indonesia', 'IE': '🇮🇪 Ireland', 'IL': '🇮🇱 Israel', 'IN': '🇮🇳 India', 'IR': '🇮🇷 Iran', 'IT': '🇮🇹 Italy', 'JP': '🇯🇵 Japan', 'KR': '🇰🇷 South Korea', 'KZ': '🇰🇿 Kazakhstan', 'LT': '🇱🇹 Lithuania', 'LU': '🇱🇺 Luxembourg', 'LV': '🇱🇻 Latvia', 'MD': '🇲🇩 Moldova', 'MX': '🇲🇽 Mexico', 'MY': '🇲🇾 Malaysia', 'NL': '🇳🇱 Netherlands', 'NZ': '🇳🇿 New Zealand', 'PH': '🇵🇭 Philippines', 'PL': '🇵🇱 Poland', 'PR': '🇵🇷 Puerto Rico', 'PT': '🇵🇹 Portugal', 'QA': '🇶🇦 Qatar', 'RO': '🇷🇴 Romania', 'RS': '🇷🇸 Serbia', 'RU': '🇷🇺 Russia', 'SA': '🇸🇦 Saudi Arabia', 'SC': '🇸🇨 Seychelles', 'SE': '🇸🇪 Sweden', 'SG': '🇸🇬 Singapore', 'SK': '🇸🇰 Slovakia', 'TH': '🇹🇭 Thailand', 'TR': '🇹🇷 Turkey', 'TW': '🇹🇼 Taiwan', 'UA': '🇺🇦 Ukraine', 'US': '🇺🇸 USA', 'UZ': '🇺🇿 Uzbekistan', 'VN': '🇻🇳 Vietnam'
 }
 COUNTRY_URLS = {"ALL": "https://raw.githubusercontent.com/NiREvil/vless/main/sub/country_proxies/02_proxies.csv"}
 COUNTRY_FILE_BASE_URL = "https://raw.githubusercontent.com/NiREvil/vless/main/sub/country_proxies/"
-NUMBER_EMOJIS = ['0ï¸âƒ£', '1ï¸âƒ£', '2ï¸âƒ£', '3ï¸âƒ£', '4ï¸âƒ£', '5ï¸âƒ£', '6ï¸âƒ£', '7ï¸âƒ£', '8ï¸âƒ£', '9ï¸âƒ£']
+NUMBER_EMOJIS = ['0️⃣', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣']
 
 # --- Database & Helper Functions ---
 def load_db():
@@ -108,8 +109,8 @@ async def test_ips_and_update_message(context: ContextTypes.DEFAULT_TYPE, chat_i
     }
     
     keyboard = [[
-        InlineKeyboardButton("â¸ï¸ Pause", callback_data=f"pause_{test_id}"),
-        InlineKeyboardButton("â¹ï¸ Cancel", callback_data=f"cancel_{test_id}")
+        InlineKeyboardButton("⏸️ Pause", callback_data=f"pause_{test_id}"),
+        InlineKeyboardButton("⏹️ Cancel", callback_data=f"cancel_{test_id}")
     ]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     context.user_data[test_id]['markup'] = reply_markup
@@ -229,17 +230,60 @@ async def process_ips_in_batches(context: ContextTypes.DEFAULT_TYPE, chat_id: in
 
         if test_data['successful']:
             all_successful_ips = [res['ip'] for res in test_data['successful']]
-            sorted_ips = sorted(all_successful_ips, key=lambda ip: ipaddress.ip_address(ip.split(':')[0].replace('[','').replace(']','')))
-            copy_text = "\n".join(sorted_ips)
             
-            await context.bot.send_message(chat_id=chat_id, text=f"To copy all IPs, tap the code block below:\n```\n{copy_text}\n```", parse_mode=ParseMode.MARKDOWN_V2)
+            # --- Embedded logic to send chunked messages and files ---
+            try:
+                # Sort IPs for consistent ordering
+                sorted_ips = sorted(all_successful_ips, key=lambda ip: ipaddress.ip_address(ip.split(':')[0].replace('[','').replace(']','')))
+            except ValueError:
+                sorted_ips = sorted(all_successful_ips)
 
-            file_name = f"successful_proxies_{uuid.uuid4().hex[:6]}"
-            txt_file = io.BytesIO(copy_text.encode('utf-8'))
-            await context.bot.send_document(chat_id=chat_id, document=txt_file, filename=f"{file_name}.txt")
-            csv_file = io.BytesIO(copy_text.encode('utf-8'))
-            await context.bot.send_document(chat_id=chat_id, document=csv_file, filename=f"{file_name}.csv")
+            TELEGRAM_CHAR_LIMIT = 4096
+            first_header = "To copy all IPs, tap the code block below:\n```\n"
+            continuation_header = "Continuation of Proxy IPs\n\n```\n"
+            footer = "\n```"
+            buffer = 200
             
+            is_first_message = True
+            current_chunk_ips = []
+
+            for ip in sorted_ips:
+                header = first_header if is_first_message else continuation_header
+                current_content = "\n".join(current_chunk_ips)
+                projected_content = current_content + ("\n" if current_content else "") + ip
+                projected_length = len(header) + len(projected_content) + len(footer)
+
+                if projected_length > TELEGRAM_CHAR_LIMIT - buffer:
+                    message_to_send = header + current_content + footer
+                    try:
+                        await context.bot.send_message(chat_id=chat_id, text=message_to_send, parse_mode=ParseMode.MARKDOWN_V2)
+                    except Exception as e:
+                        logger.error(f"Failed to send a chunk of the IP list: {e}")
+
+                    current_chunk_ips = [ip]
+                    is_first_message = False
+                else:
+                    current_chunk_ips.append(ip)
+
+            if current_chunk_ips:
+                header = first_header if is_first_message else continuation_header
+                message_to_send = header + "\n".join(current_chunk_ips) + footer
+                try:
+                    await context.bot.send_message(chat_id=chat_id, text=message_to_send, parse_mode=ParseMode.MARKDOWN_V2)
+                except Exception as e:
+                    logger.error(f"Failed to send the final chunk of the IP list: {e}")
+
+            # Send the files containing the full list
+            full_list_text = "\n".join(sorted_ips)
+            file_name = f"successful_proxies_{uuid.uuid4().hex[:6]}"
+            
+            try:
+                txt_file = io.BytesIO(full_list_text.encode('utf-8'))
+                await context.bot.send_document(chat_id=chat_id, document=txt_file, filename=f"{file_name}.txt")
+                csv_file = io.BytesIO(full_list_text.encode('utf-8'))
+                await context.bot.send_document(chat_id=chat_id, document=csv_file, filename=f"{file_name}.csv")
+            except Exception as e:
+                logger.error(f"Failed to send result files: {e}")
     finally:
         if test_id in context.user_data: del context.user_data[test_id]
 
@@ -300,17 +344,61 @@ async def run_test_and_post(context: ContextTypes.DEFAULT_TYPE, target_chat_id, 
             await asyncio.sleep(0.5)
 
         all_successful_ips = [res['ip'] for res in successful_results_with_info]
-        sorted_ips = sorted(all_successful_ips, key=lambda ip: ipaddress.ip_address(ip.split(':')[0].replace('[','').replace(']','')))
-        copy_text = "\n".join(sorted_ips)
         
-        await context.bot.send_message(chat_id=target_chat_id, text=f"To copy all IPs, tap the code block below:\n```\n{copy_text}\n```", parse_mode=ParseMode.MARKDOWN_V2)
-        
-        file_name = f"successful_proxies_{uuid.uuid4().hex[:6]}"
-        txt_file = io.BytesIO(copy_text.encode('utf-8'))
-        await context.bot.send_document(chat_id=target_chat_id, document=txt_file, filename=f"{file_name}.txt")
-        csv_file = io.BytesIO(copy_text.encode('utf-8'))
-        await context.bot.send_document(chat_id=target_chat_id, document=csv_file, filename=f"{file_name}.csv")
+        # --- Embedded logic to send chunked messages and files ---
+        try:
+            # Sort IPs for consistent ordering
+            sorted_ips = sorted(all_successful_ips, key=lambda ip: ipaddress.ip_address(ip.split(':')[0].replace('[','').replace(']','')))
+        except ValueError:
+            sorted_ips = sorted(all_successful_ips)
 
+        TELEGRAM_CHAR_LIMIT = 4096
+        first_header = "To copy all IPs, tap the code block below:\n```\n"
+        continuation_header = "Continuation of Proxy IPs\n\n```\n"
+        footer = "\n```"
+        buffer = 200
+
+        is_first_message = True
+        current_chunk_ips = []
+
+        for ip in sorted_ips:
+            header = first_header if is_first_message else continuation_header
+            current_content = "\n".join(current_chunk_ips)
+            projected_content = current_content + ("\n" if current_content else "") + ip
+            projected_length = len(header) + len(projected_content) + len(footer)
+
+            if projected_length > TELEGRAM_CHAR_LIMIT - buffer:
+                message_to_send = header + current_content + footer
+                try:
+                    await context.bot.send_message(chat_id=target_chat_id, text=message_to_send, parse_mode=ParseMode.MARKDOWN_V2)
+                except Exception as e:
+                    logger.error(f"Failed to send a chunk of the IP list for post: {e}")
+
+                current_chunk_ips = [ip]
+                is_first_message = False
+            else:
+                current_chunk_ips.append(ip)
+
+        if current_chunk_ips:
+            header = first_header if is_first_message else continuation_header
+            message_to_send = header + "\n".join(current_chunk_ips) + footer
+            try:
+                await context.bot.send_message(chat_id=target_chat_id, text=message_to_send, parse_mode=ParseMode.MARKDOWN_V2)
+            except Exception as e:
+                logger.error(f"Failed to send the final chunk of the IP list for post: {e}")
+
+        # Send the files containing the full list
+        full_list_text = "\n".join(sorted_ips)
+        file_name = f"successful_proxies_{uuid.uuid4().hex[:6]}"
+
+        try:
+            txt_file = io.BytesIO(full_list_text.encode('utf-8'))
+            await context.bot.send_document(chat_id=target_chat_id, document=txt_file, filename=f"{file_name}.txt")
+            csv_file = io.BytesIO(full_list_text.encode('utf-8'))
+            await context.bot.send_document(chat_id=target_chat_id, document=csv_file, filename=f"{file_name}.csv")
+        except Exception as e:
+            logger.error(f"Failed to send result files for post: {e}")
+            
     except Exception as e:
         logger.error(f"Error in run_test_and_post: {e}")
         await context.bot.send_message(chat_id=confirmation_message.chat_id, text=f"An unexpected error occurred while posting: {e}")
@@ -322,7 +410,7 @@ async def run_test_and_post(context: ContextTypes.DEFAULT_TYPE, target_chat_id, 
 
 # --- Command & Conversation Handlers ---
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text("ðŸ‘‹ Welcome! Use the menu commands to start.")
+    await update.message.reply_text("👋 Welcome! Use the menu commands to start.")
 
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Cancels the current operation, with a check for group mentions."""
@@ -356,117 +444,58 @@ async def start_main_conversation(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text(f"Please use the command without mentioning the bot's name, like `/{command}`.", parse_mode=ParseMode.MARKDOWN)
         return ConversationHandler.END
 
-    # --- START: Group Chat Logic Fix ---
     if update.message.chat.type != ChatType.PRIVATE:
         prompt_message = await update.message.reply_text(f"To use `/{command}`, please **reply** to this message with your input.", parse_mode=ParseMode.MARKDOWN)
-        
-        # This is the critical fix: We store the prompt info directly in chat_data,
-        # using the message ID as the key. This is simple and reliable.
         context.chat_data[str(prompt_message.message_id)] = {
             "command": command, 
             "user_id": update.message.from_user.id
         }
         return AWAIT_MAIN_INPUT
-    # --- END: Group Chat Logic Fix ---
-    
-    # Private chat logic remains completely untouched and will work as before.
-    if context.args:
-        sent_message = await update.message.reply_text(f"Processing your request...")
-        await process_command_logic(update, context, command, context.args, sent_message)
-        return ConversationHandler.END
-    else:
-        if context.user_data.get('active_prompt'):
-            old_prompt = context.user_data.pop('active_prompt')
-            try:
-                await context.bot.edit_message_text(chat_id=update.message.chat_id, message_id=old_prompt['message_id'],
-                    text=f"This `/{old_prompt['command']}` command has expired. Please proceed with the new command.",
-                    parse_mode=ParseMode.MARKDOWN)
-            except BadRequest: pass
-
-        prompts = {'proxyip': "Please send your IP(s).", 'iprange': "Please send your IP range(s).", 'domain': "Please send your domain(s).", 'file': "Please send the file URL."}
-        prompt_message = await update.message.reply_text(prompts.get(command, "Please send your input."))
-        context.user_data['active_prompt'] = {'message_id': prompt_message.message_id, 'command': command}
-        return AWAIT_MAIN_INPUT
-    
-    # Private chat logic remains the same
-    if context.args:
-        sent_message = await update.message.reply_text(f"Processing your request...")
-        await process_command_logic(update, context, command, context.args, sent_message)
-        return ConversationHandler.END
-    else:
-        if context.user_data.get('active_prompt'):
-            old_prompt = context.user_data.pop('active_prompt')
-            try:
-                await context.bot.edit_message_text(chat_id=update.message.chat_id, message_id=old_prompt['message_id'],
-                    text=f"This `/{old_prompt['command']}` command has expired. Please proceed with the new command.",
-                    parse_mode=ParseMode.MARKDOWN)
-            except BadRequest: pass
-
-        prompts = {'proxyip': "Please send your IP(s).", 'iprange': "Please send your IP range(s).", 'domain': "Please send your domain(s).", 'file': "Please send the file URL."}
-        prompt_message = await update.message.reply_text(prompts.get(command, "Please send your input."))
-        context.user_data['active_prompt'] = {'message_id': prompt_message.message_id, 'command': command}
-        return AWAIT_MAIN_INPUT
     
     if context.args:
         sent_message = await update.message.reply_text(f"Processing your request...")
-        await process_command_logic(update, context, command, context.args, sent_message)
-        return ConversationHandler.END
+        return await process_command_logic(update, context, command, context.args, sent_message)
     else:
-        if context.user_data.get('active_prompt'):
-            old_prompt = context.user_data.pop('active_prompt')
-            try:
-                await context.bot.edit_message_text(chat_id=update.message.chat_id, message_id=old_prompt['message_id'],
-                    text=f"This `/{old_prompt['command']}` command has expired. Please proceed with the new command.",
-                    parse_mode=ParseMode.MARKDOWN)
-            except BadRequest: pass
-
-        prompts = {'proxyip': "Please send your IP(s).", 'iprange': "Please send your IP range(s).", 'domain': "Please send your domain(s).", 'file': "Please send the file URL."}
-        prompt_message = await update.message.reply_text(prompts.get(command, "Please send your input."))
-        context.user_data['active_prompt'] = {'message_id': prompt_message.message_id, 'command': command}
+        prompts = {
+            'proxyip': "Please send your IP(s).", 
+            'iprange': "Please send your IP range(s).", 
+            'domain': "Please send your domain(s).", 
+            'file': "Please send the file URL."
+        }
+        await update.message.reply_text(prompts.get(command, "Please send your input."))
+        context.user_data['command_in_progress'] = command
+        # For domain, we go to a specific state to handle re-prompting
+        if command == 'domain':
+            return AWAIT_DOMAIN_CORRECTION
         return AWAIT_MAIN_INPUT
 
 async def handle_main_conversation_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles user's text input after a command prompt."""
     command = None
     
-    # --- START: Group Chat Logic Fix ---
     if update.message.chat.type != ChatType.PRIVATE:
-        # Check if it's a reply and if the bot was the one replied to
         if update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id:
             prompt_message_id = str(update.message.reply_to_message.message_id)
-            
-            # This is the critical fix: We look for the data directly in chat_data
-            # using the message ID as the key.
             if prompt_message_id in context.chat_data:
-                stored_data = context.chat_data.pop(prompt_message_id) # Read and remove to prevent reuse
-                
-                # Check if the user who replied is the one who initiated the command
+                stored_data = context.chat_data.pop(prompt_message_id)
                 if stored_data and stored_data["user_id"] == update.message.from_user.id:
                     command = stored_data['command']
-    # --- END: Group Chat Logic Fix ---
-    
-    else: # Private chat logic remains completely untouched.
-        if context.user_data.get('active_prompt'):
-            command = context.user_data.pop('active_prompt', {}).get('command')
+    else:
+        command = context.user_data.pop('command_in_progress', None)
 
     if not command:
         return ConversationHandler.END
 
     sent_message = await update.message.reply_text("Processing your input...")
     inputs = update.message.text.split()
-    await process_command_logic(update, context, command, inputs, sent_message)
-    return ConversationHandler.END
-
-    sent_message = await update.message.reply_text("Processing your input...")
-    inputs = update.message.text.split()
-    await process_command_logic(update, context, command, inputs, sent_message)
-    return ConversationHandler.END
+    return await process_command_logic(update, context, command, inputs, sent_message)
 
 async def process_command_logic(update: Update, context: ContextTypes.DEFAULT_TYPE, command: str, inputs: list, message):
     chat_id, message_id = message.chat_id, message.message_id
     
     if command == "proxyip":
         await test_ips_and_update_message(context, chat_id, message_id, inputs, "Proxy IP Results")
+        return ConversationHandler.END
     
     elif command == "iprange":
         ips_to_check, range_map, title = [], None, "IP Range Results"
@@ -485,8 +514,30 @@ async def process_command_logic(update: Update, context: ContextTypes.DEFAULT_TY
             await message.edit_text("Invalid range format or no IPs found in range(s).")
         else:
             await test_ips_and_update_message(context, chat_id, message_id, ips_to_check, title, range_map=range_map)
+        return ConversationHandler.END
 
     elif command == "domain":
+        for domain in inputs:
+            if 'http://' in domain or 'https://' in domain or '/' in domain:
+                await message.edit_text(
+                    "Invalid format. Please provide the domain without any protocol (http://, https://) or slashes.\n\n"
+                    "Example: Nima.nscl.ir"
+                    "\n"
+                    "Please send the correct domain, or /cancel to quit."
+                )
+                context.user_data['command_in_progress'] = 'domain'
+                return AWAIT_DOMAIN_CORRECTION
+
+            if not re.match(r'^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}$', domain):
+                await message.edit_text(
+                    f"The domain format for '{domain}' is incorrect.\n\n"
+                    "Example: Nima.nscl.ir"
+                    "\n"
+                    "Please send the correct domain, or /cancel to quit."
+                )
+                context.user_data['command_in_progress'] = 'domain'
+                return AWAIT_DOMAIN_CORRECTION
+        
         await message.edit_text(f"Resolving {len(inputs)} domain(s)...")
         ips_to_check, domain_map, title = [], None, ""
         
@@ -511,6 +562,8 @@ async def process_command_logic(update: Update, context: ContextTypes.DEFAULT_TY
             await message.edit_text("Could not resolve any IPs from the provided domains.")
         else:
             await test_ips_and_update_message(context, chat_id, message_id, unique_ips_to_check, title, domain_map=domain_map)
+        
+        return ConversationHandler.END
 
     elif command == "file":
         file_url = inputs[0]
@@ -523,6 +576,7 @@ async def process_command_logic(update: Update, context: ContextTypes.DEFAULT_TY
             if not ips_to_check: await message.edit_text("No valid IPs found in the file.")
             else: await test_ips_and_update_message(context, chat_id, message.message_id, ips_to_check, "File Test Results")
         except Exception as e: await message.edit_text(f"Error processing file: {e}")
+        return ConversationHandler.END
 
 async def freeproxyip_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if '@' in update.message.text.split()[0] and update.message.chat.type != ChatType.PRIVATE:
@@ -539,7 +593,7 @@ async def freeproxyip_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             keyboard.append(row)
             row = []
     if row: keyboard.append(row)
-    keyboard.append([InlineKeyboardButton("ðŸ”™ Back", callback_data="freeproxy_cancel")])
+    keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="freeproxy_cancel")])
     await update.message.reply_text("Select from the list of countries below:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def addchat_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -576,8 +630,8 @@ async def addchat_receive_id(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data['new_chat_id'] = chat_id_str
     
     keyboard = [[
-        InlineKeyboardButton("âœ… Yes", callback_data="addconfirm_yes"),
-        InlineKeyboardButton("âŒ No", callback_data="addconfirm_no")
+        InlineKeyboardButton("✅ Yes", callback_data="addconfirm_yes"),
+        InlineKeyboardButton("❌ No", callback_data="addconfirm_no")
     ]]
     if chat_type == 'group':
         prompt = f"You entered group ID: `{chat_id_str}`\n\nHas this bot been added to the group?"
@@ -622,7 +676,7 @@ async def addchat_receive_name(update: Update, context: ContextTypes.DEFAULT_TYP
         user_chats.append({"chat_id": final_chat_id, "name": name})
         db[user_id_str] = user_chats
         save_db(db)
-        await update.message.reply_text(f"âœ… Destination '{name}' added successfully!")
+        await update.message.reply_text(f"✅ Destination '{name}' added successfully!")
     else:
         await update.message.reply_text("This chat ID is already registered.")
     context.user_data.clear()
@@ -641,7 +695,7 @@ async def deletechat_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return ConversationHandler.END
 
     keyboard = [[InlineKeyboardButton(chat['name'], callback_data=f"del_chat_{chat['chat_id']}")] for chat in user_chats]
-    keyboard.append([InlineKeyboardButton("ðŸ”™ Back", callback_data="del_cancel")])
+    keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="del_cancel")])
     await update.message.reply_text("Select a destination to delete:", reply_markup=InlineKeyboardMarkup(keyboard))
     return SELECT_CHAT_TO_DELETE
 
@@ -657,8 +711,8 @@ async def deletechat_select(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     context.user_data['chat_to_delete'] = chat_id_to_delete
     
     keyboard = [[
-        InlineKeyboardButton("âœ… Yes, delete it", callback_data="del_confirm_yes"),
-        InlineKeyboardButton("âŒ No, go back", callback_data="del_confirm_no")
+        InlineKeyboardButton("✅ Yes, delete it", callback_data="del_confirm_yes"),
+        InlineKeyboardButton("❌ No, go back", callback_data="del_confirm_no")
     ]]
     await query.edit_message_text(f"Are you sure you want to delete this destination?", reply_markup=InlineKeyboardMarkup(keyboard))
     return CONFIRM_DELETION
@@ -672,7 +726,7 @@ async def deletechat_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
         db = load_db()
         user_chats = db.get(user_id_str, [])
         keyboard = [[InlineKeyboardButton(chat['name'], callback_data=f"del_chat_{chat['chat_id']}")] for chat in user_chats]
-        keyboard.append([InlineKeyboardButton("ðŸ”™ Back", callback_data="del_cancel")])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="del_cancel")])
         await query.edit_message_text("Select a destination to delete:", reply_markup=InlineKeyboardMarkup(keyboard))
         return SELECT_CHAT_TO_DELETE
 
@@ -687,7 +741,7 @@ async def deletechat_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if len(updated_chats) < len(user_chats):
         db[user_id_str] = updated_chats
         save_db(db)
-        await query.edit_message_text("âœ… Destination successfully deleted.")
+        await query.edit_message_text("✅ Destination successfully deleted.")
     else:
         await query.edit_message_text("Could not find the destination to delete.")
     return ConversationHandler.END
@@ -716,7 +770,7 @@ async def post_select_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         [InlineKeyboardButton("IP Range Test", callback_data="post_cmd_iprange")],
         [InlineKeyboardButton("Domain Test", callback_data="post_cmd_domain")],
         [InlineKeyboardButton("File URL Test", callback_data="post_cmd_file")],
-        [InlineKeyboardButton("âœ¨ Free Proxies by Country", callback_data="post_cmd_freeproxyip")],
+        [InlineKeyboardButton("✨ Free Proxies by Country", callback_data="post_cmd_freeproxyip")],
     ]
     await query.edit_message_text("Now, select the type of test:", reply_markup=InlineKeyboardMarkup(keyboard))
     return SELECT_COMMAND
@@ -736,7 +790,7 @@ async def post_select_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             row.append(InlineKeyboardButton(name, callback_data=f"post_country_{code}"))
             if len(row) == 3: keyboard.append(row); row = []
         if row: keyboard.append(row)
-        keyboard.append([InlineKeyboardButton("ðŸ”™ Back", callback_data="post_cmd_back")])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="post_cmd_back")])
         await query.edit_message_text("Select from the list of countries below:", reply_markup=InlineKeyboardMarkup(keyboard))
         return AWAIT_POST_COUNTRY
     else:
@@ -748,7 +802,7 @@ async def post_handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     command = context.user_data.get('post_command')
     if not target_chat_id_str: return ConversationHandler.END
     
-    confirmation_message = await update.message.reply_text("âœ… Request received. The test will run in the background. Final results will be posted shortly...")
+    confirmation_message = await update.message.reply_text("✅ Request received. The test will run in the background. Final results will be posted shortly...")
     inputs = update.message.text.split()
     context.application.create_task(run_post_command_logic(context, target_chat_id_str, command, inputs, confirmation_message))
     
@@ -765,7 +819,7 @@ async def post_handle_country_selection(update: Update, context: ContextTypes.DE
             [InlineKeyboardButton("IP Range Test", callback_data="post_cmd_iprange")],
             [InlineKeyboardButton("Domain Test", callback_data="post_cmd_domain")],
             [InlineKeyboardButton("File URL Test", callback_data="post_cmd_file")],
-            [InlineKeyboardButton("âœ¨ Free Proxies by Country", callback_data="post_cmd_freeproxyip")],
+            [InlineKeyboardButton("✨ Free Proxies by Country", callback_data="post_cmd_freeproxyip")],
         ]
         await query.edit_message_text("Now, select the type of test:", reply_markup=InlineKeyboardMarkup(keyboard))
         return SELECT_COMMAND
@@ -775,7 +829,7 @@ async def post_handle_country_selection(update: Update, context: ContextTypes.DE
     if not target_chat_id_str: return ConversationHandler.END
 
     country_name_full = COUNTRIES.get(country_code, "Selected Country")
-    confirmation_message = await query.edit_message_text(f"âœ… Request received for {country_name_full}. The results will be posted shortly.")
+    confirmation_message = await query.edit_message_text(f"✅ Request received for {country_name_full}. The results will be posted shortly.")
     
     context.application.create_task(run_post_command_logic(context, target_chat_id_str, "freeproxyip", [country_code], confirmation_message, title_prefix=f"{country_name_full} Test Results:"))
     
@@ -888,7 +942,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if callback_type == 'pause':
         context.user_data[test_id]['status'] = 'paused'
-        keyboard = [[InlineKeyboardButton("â–¶ï¸ Resume", callback_data=f"resume_{test_id}"), InlineKeyboardButton("â¹ï¸ Cancel", callback_data=f"cancel_{test_id}")]]
+        keyboard = [[InlineKeyboardButton("▶️ Resume", callback_data=f"resume_{test_id}"), InlineKeyboardButton("⏹️ Cancel", callback_data=f"cancel_{test_id}")]]
         context.user_data[test_id]['markup'] = InlineKeyboardMarkup(keyboard)
         try:
             current_text = query.message.text_markdown_v2.split("\n\n**Operation paused")[0]
@@ -897,7 +951,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
              await query.edit_message_text(text=query.message.text + "\n\n**Operation paused. Click Resume to continue.**", parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
     elif callback_type == 'resume':
         context.user_data[test_id]['status'] = 'running'
-        keyboard = [[InlineKeyboardButton("â¸ï¸ Pause", callback_data=f"pause_{test_id}"), InlineKeyboardButton("â¹ï¸ Cancel", callback_data=f"cancel_{test_id}")]]
+        keyboard = [[InlineKeyboardButton("⏸️ Pause", callback_data=f"pause_{test_id}"), InlineKeyboardButton("⏹️ Cancel", callback_data=f"cancel_{test_id}")]]
         context.user_data[test_id]['markup'] = InlineKeyboardMarkup(keyboard)
         try:
             original_text = query.message.text.split("\n\n**Operation paused.")[0]
@@ -915,21 +969,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def post_init(application: Application):
     """Sets bot commands after initialization."""
     commands = [
-        BotCommand("start", "ðŸ¤– Start Using Bot"),
-        BotCommand("proxyip", "ðŸ” Check Proxy IPs"),
-        BotCommand("iprange", "ðŸ” Check Proxy IP Ranges"),
-        BotCommand("domain", "ðŸ”„ Resolving Domains"),
-        BotCommand("file", "ðŸ” Check Proxy IPs From a File URL"),
-        BotCommand("freeproxyip", "âœ¨ Get Free Proxies By Country"),
-        BotCommand("addchat", "âž• Register a Channel/Group"),
-        BotCommand("deletechat", "ðŸ—‘ï¸ Delete a Registered Channel/Group"),
-        BotCommand("post", "ðŸš€ Post Results To a Chat"),
-        BotCommand("cancel", "âŒ Cancel Current Operation"),
+        BotCommand("start", "🤖 Start Using Bot"),
+        BotCommand("proxyip", "🔍 Check Proxy IPs"),
+        BotCommand("iprange", "🔍 Check Proxy IP Ranges"),
+        BotCommand("domain", "🔄 Resolving Domains"),
+        BotCommand("file", "🔍 Check Proxy IPs From a File URL"),
+        BotCommand("freeproxyip", "✨ Get Free Proxies By Country"),
+        BotCommand("addchat", "➕ Register a Channel/Group"),
+        BotCommand("deletechat", "🗑️ Delete a Registered Channel/Group"),
+        BotCommand("post", "🚀 Post Results To a Chat"),
+        BotCommand("cancel", "❌ Cancel Current Operation"),
     ]
     await application.bot.set_my_commands(commands)
     
 def main() -> None:
-    cprint("made with â¤ï¸â€ðŸ”¥ by @mehdiasmart", "light_cyan")
+    cprint("made with ❤️‍🔥 by @mehdiasmart", "light_cyan")
     
     application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
     
@@ -939,6 +993,7 @@ def main() -> None:
         entry_points=[CommandHandler(cmd, start_main_conversation) for cmd in command_list],
         states={
             AWAIT_MAIN_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_main_conversation_input)],
+            AWAIT_DOMAIN_CORRECTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_main_conversation_input)],
         },
         fallbacks=[
             CommandHandler("proxyip", start_main_conversation),
