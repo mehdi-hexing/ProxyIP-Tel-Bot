@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 # --- Constants ---
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-WORKER_URL = "https://check80.pages.dev"
+WORKER_URL = "https://YourProxyIPChecker.pages.dev"
 DB_FILE = "bot_data.json"
 MESSAGE_ENTITY_LIMIT = 45
 
