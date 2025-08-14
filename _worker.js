@@ -68,6 +68,20 @@ async function checkProxyIP(proxyIPInput, env) {
     }
 }
 
+async function getIpInfo(ip) {
+    try {
+        const response = await fetch(`http://ip-api.com/json/${ip}?fields=status,message,country,countryCode,as&lang=en`);
+        if (!response.ok) return { country: 'N/A', countryCode: 'N/A', as: 'N/A' };
+        const data = await response.json();
+        if (data.status === 'fail') return { country: 'N/A', countryCode: 'N/A', as: 'N/A' };
+        return data;
+    } catch (e) {
+        return { country: 'N/A', countryCode: 'N/A', as: 'N/A' };
+    }
+}
+
+// --- Helper Functions ---
+
 async function doubleHash(text) {
   const encoder = new TextEncoder();
   const firstHashBuffer = await crypto.subtle.digest('MD5', encoder.encode(text));
@@ -112,18 +126,6 @@ async function resolveDomain(domain) {
   }
 }
 
-async function getIpInfo(ip) {
-    try {
-        const response = await fetch(`http://ip-api.com/json/${ip}?fields=status,message,country,countryCode,as&lang=en`);
-        if (!response.ok) return { country: 'N/A', countryCode: 'N/A', as: 'N/A' };
-        const data = await response.json();
-        if (data.status === 'fail') return { country: 'N/A', countryCode: 'N/A', as: 'N/A' };
-        return data;
-    } catch (e) {
-        return { country: 'N/A', countryCode: 'N/A', as: 'N/A' };
-    }
-}
-
 function parseIPRangeServer(rangeInput) {
     const ips = [];
     const cidrMatch = rangeInput.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\/24$/);
@@ -146,7 +148,7 @@ function parseIPRangeServer(rangeInput) {
 const forgivingIPv4Regex = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
 const ipv6Regex = /(?:[A-F0-9]{1,4}:){7}[A-F0-9]{1,4}|\[(?:[A-F0-9]{1,4}:){7}[A-F0-9]{1,4}\]/gi;
 
-// --- HTML Page Generators ---
+// --- HTML Page Generators (No changes needed here) ---
 
 function generateDomainCheckPageHTML({ domains, temporaryTOKEN }) {
     const domainsJson = JSON.stringify(domains);
@@ -987,12 +989,12 @@ export default {
         const UA = request.headers.get('User-Agent') || 'null';
         const hostname = url.hostname;
         
+        // --- Web UI Routes ---
         if (path.toLowerCase().startsWith('/domain/')) {
             const domains_string = decodeURIComponent(path.substring('/domain/'.length));
             const domains = domains_string.split(',').map(s => s.trim()).filter(Boolean);
-            if (domains.length === 0) {
-                return new Response('No domains provided', { status: 400 });
-            }
+            if (domains.length === 0) return new Response('No domains provided', { status: 400 });
+            
             const timestamp = Math.ceil(new Date().getTime() / (1000 * 60 * 31));
             const temporaryTOKEN = await doubleHash(hostname + timestamp + UA);
             return new Response(generateDomainCheckPageHTML({ domains, temporaryTOKEN }), { headers: { 'Content-Type': 'text/html;charset=UTF-8' } });
@@ -1011,21 +1013,13 @@ export default {
                 const ips_string = decodeURIComponent(path.substring('/proxyip/'.length));
                 ipsToCheck = ips_string.split(',').map(s => s.trim()).filter(Boolean);
                 contentHash = simpleHash(ipsToCheck.join(''));
-                options = {
-                    title: "Proxy IP's Results:",
-                    subtitleLabel: "IPs:",
-                    subtitleContent: ips_string,
-                };
+                options = { title: "Proxy IP's Results:", subtitleLabel: "IPs:", subtitleContent: ips_string };
             } else if (path.toLowerCase().startsWith('/iprange/')) {
                 pageType = 'iprange';
                 const ranges_string = decodeURIComponent(path.substring('/iprange/'.length));
                 ipsToCheck = ranges_string.split(',').flatMap(range => parseIPRangeServer(range.trim()));
                 contentHash = simpleHash(ipsToCheck.join(''));
-                options = {
-                    title: "IP Range's Results:",
-                    subtitleLabel: "Range's:",
-                    subtitleContent: ranges_string,
-                };
+                options = { title: "IP Range's Results:", subtitleLabel: "Range's:", subtitleContent: ranges_string };
             } else { // /file/ path
                 pageType = 'file';
                 const targetUrl = decodeURIComponent(request.url.substring(request.url.indexOf('/file/') + 6));
@@ -1040,11 +1034,7 @@ export default {
                         const parts = ip.split(':');
                         return parts.length === 1 || !isNaN(parseInt(parts[parts.length - 1]));
                     });
-                     options = {
-                        title: 'File Test Results:',
-                        subtitleLabel: 'File Link Address:',
-                        subtitleContent: targetUrl,
-                    };
+                     options = { title: 'File Test Results:', subtitleLabel: 'File Link Address:', subtitleContent: targetUrl };
                 } catch(e) {
                     return new Response(`Error processing file: ${e.message}`, { status: 500 });
                 }
@@ -1056,6 +1046,7 @@ export default {
             return new Response(CLIENT_SCRIPT, { headers: { "Content-Type": "application/javascript;charset=UTF-8" } });
         }
 
+        // --- API Routes ---
         if (path.toLowerCase().startsWith('/api/')) {
             const timestampForToken = Math.ceil(new Date().getTime() / (1000 * 60 * 31));
             const temporaryTOKEN = await doubleHash(hostname + timestampForToken + UA);
@@ -1095,9 +1086,19 @@ export default {
                 }
             }
             
+            // This endpoint is added for compatibility with the bot script, even though /api/check returns this info already.
+            if (path.toLowerCase() === '/api/ip-info') {
+                 let ip = url.searchParams.get('ip') || request.headers.get('CF-Connecting-IP');
+                if (!ip) return new Response(JSON.stringify({success: false, error: 'IP parameter not provided'}), { status: 400, headers: { "Content-Type": "application/json" }});
+                if (ip.includes('[')) ip = ip.replace(/\[|\]/g, '');
+                const data = await getIpInfo(ip);
+                return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });
+            }
+
             return new Response(JSON.stringify({success: false, error: 'API route not found'}), { status: 404, headers: { "Content-Type": "application/json" } });
         }
         
+        // --- Main Page and Favicon ---
         const faviconURL = env.ICO || 'https://github.com/user-attachments/assets/31a6ced0-62b8-429f-a98e-082ea5ac1990';
 
         if (path.toLowerCase() === '/favicon.ico') {
