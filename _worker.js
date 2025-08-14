@@ -1,70 +1,85 @@
 import { connect } from 'cloudflare:sockets';
 
-// --- New Validation Logic ---
-
-async function validateProxyIP(proxyHost, proxyPort) {
-  const maxRetries = 4;
-  let lastError = "Proxy validation failed after all attempts.";
-  const startTime = performance.now();
-
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    let socket = null;
+// --- main logic integrated
+async function checkProxyIP(proxyIPInput, env) {
     try {
-      const connectionTimeout = 1000 + (attempt * 500);
-      socket = await connectWithTimeout({ hostname: proxyHost, port: proxyPort }, connectionTimeout);
-      const writer = socket.writable.getWriter();
-      const reader = socket.readable.getReader();
-      await writer.write(buildTLSHandshake());
-      const { value: responseData, timedOut } = await readWithTimeout(reader, connectionTimeout);
+        const proxyCheckResponse = await fetch(`http://zero000.serv00.net:33163/api/v1/check?proxy=${encodeURIComponent(proxyIPInput)}`);
 
-      if (timedOut) throw new Error(`Attempt ${attempt + 1}: Timed out waiting for response.`);
-      if (!responseData || responseData.length === 0) throw new Error(`Attempt ${attempt + 1}: Received no data.`);
-      if (responseData[0] === 0x16) {
+        if (!proxyCheckResponse.ok) {
+            throw new Error(`Proxy check API failed with status: ${proxyCheckResponse.status}`);
+        }
+
+        const data = await proxyCheckResponse.json();
+        
+        if (data.proxyip !== true) {
+            return {
+                success: false,
+                proxyIP: proxyIPInput,
+                timestamp: new Date().toISOString(),
+                error: "Proxy check failed (API returned false)."
+            };
+        }
+        
+        let portRemote = 443;
+        let hostToCheck = proxyIPInput;
+
+        if (proxyIPInput.includes('.tp')) {
+            const portMatch = proxyIPInput.match(/\.tp(\d+)\./);
+            if (portMatch) portRemote = parseInt(portMatch[1], 10);
+            hostToCheck = proxyIPInput.split('.tp')[0];
+        } else if (proxyIPInput.includes('[') && proxyIPInput.includes(']:')) {
+            portRemote = parseInt(proxyIPInput.split(']:')[1], 10);
+            hostToCheck = proxyIPInput.split(']:')[0] + ']';
+        } else if (proxyIPInput.includes(':') && !proxyIPInput.startsWith('[')) {
+            const parts = proxyIPInput.split(':');
+            if (parts.length === 2 && parts[0].includes('.')) { 
+                hostToCheck = parts[0];
+                portRemote = parseInt(parts[1], 10) || 443;
+            }
+        }
+        
+        const cleanIp = hostToCheck.replace(/\[|\]/g, '');
+        const ipInfo = await getIpInfo(cleanIp);
+        
+        const score = data.riskScore || 0;
+        const level = data.riskLevel || 'Unknown';
+        let emoji = '⚪️';
+        if (level.toLowerCase() === 'high') emoji = '🔴';
+        else if (level.toLowerCase() === 'medium') emoji = '🟡';
+        else if (level.toLowerCase() === 'low') emoji = '🟢';
+        
+        const risk = { score, level, emoji };
+        
         return {
-          success: true,
-          message: `Proxy is valid. Verified on attempt ${attempt + 1}.`,
-          responseTime: Math.round(performance.now() - startTime)
+            success: true,
+            proxyIP: hostToCheck,
+            portRemote: portRemote,
+            timestamp: new Date().toISOString(),
+            info: ipInfo, 
+            risk: risk     
         };
-      } else {
-        throw new Error(`Attempt ${attempt + 1}: Received a non-TLS response.`);
-      }
+
     } catch (error) {
-      lastError = `Attempt ${attempt + 1} failed: ${error.message || error.toString()}`;
-      if ((error.message || "").toLowerCase().includes('connection refused')) break;
-    } finally {
-      if (socket) socket.close();
+        return {
+            success: false,
+            proxyIP: proxyIPInput,
+            timestamp: new Date().toISOString(),
+            error: error.message || "An unexpected error occurred"
+        };
     }
-  }
-  return { success: false, message: lastError, responseTime: -1 };
 }
 
-function buildTLSHandshake() {
-  const hexStr = '16030107a30100079f0303af1f4d78be2002cf63e8c727224cf1ee4a8ac89a0ad04bc54cbed5cd7c830880203d8326ae1d1d076ec749df65de6d21dec7371c589056c0a548e31624e121001e0020baba130113021303c02bc02fc02cc030cca9cca8c013c014009c009d002f0035010007361a1a0000000a000c000acaca11ec001d00170018fe0d00ba0000010001fc00206a2fb0535a0a5e565c8a61dcb381bab5636f1502bbd09fe491c66a2d175095370090dd4d770fc5e14f4a0e13cfd919a532d04c62eb4a53f67b1375bf237538cea180470d942bdde74611afe80d70ad25afb1d5f02b2b4eed784bc2420c759a742885f6ca982b25d0fdd7d8f618b7f7bc10172f61d446d8f8a6766f3587abbae805b8ef40fcb819194ac49e91c6c3762775f8dc269b82a21ddccc9f6f43be62323147b411475e47ea2c4efe52ef2cef5c7b32000d00120010040308040401050308050501080606010010000e000c02683208687474702f312e31000b0002010000050005010000000044cd00050003026832001b00030200020017000000230000002d000201010012000000000010000e00000b636861746770742e636f6dff01000100002b0007061a1a03040303003304ef04edcaca00010011ec04c05eac5510812e46c13826d28279b13ce62b6464e01ae1bb6d49640e57fb3191c656c4b0167c246930699d4f467c19d60dacaa86933a49e5c97390c3249db33c1aa59f47205701419461569cb01a22b4378f5f3bb21d952700f250a6156841f2cc952c75517a481112653400913f9ab58982a3f2d0010aba5ae99a2d69f6617a4220cd616de58ccbf5d10c5c68150152b60e2797521573b10413cb7a3aab25409d426a5b64a9f3134e01dc0dd0fc1a650c7aafec00ca4b4dddb64c402252c1c69ca347bb7e49b52b214a7768657a808419173bcbea8aa5a8721f17c82bc6636189b9ee7921faa76103695a638585fe678bcbb8725831900f808863a74c52a1b2caf61f1dec4a9016261c96720c221f45546ce0e93af3276dd090572db778a865a07189ae4f1a64c6dbaa25a5b71316025bd13a6012994257929d199a7d90a59285c75bd4727a8c93484465d62379cd110170073aad2a3fd947087634574315c09a7ccb60c301d59a7c37a330253a994a6857b8556ce0ac3cda4c6fe3855502f344c0c8160313a3732bce289b6bda207301e7b318277331578f370ccbcd3730890b552373afeb162c0cb59790f79559123b2d437308061608a704626233d9f73d18826e27f1c00157b792460eda9b35d48b4515a17c6125bdb96b114503c99e7043b112a398888318b956a012797c8a039a51147b8a58071793c14a3611fb0424e865f48a61cac7c43088c634161cea089921d229e1a370effc5eff2215197541394854a201a6ebf74942226573bb95710454bd27a52d444690837d04611b676269873c50c3406a79077e6606478a841f96f7b076a2230fd34f3eea301b77bf00750c28357a9df5b04f192b9c0bbf4f71891f1842482856b021280143ae74356c5e6a8e3273893086a90daa7a92426d8c370a45e3906994b8fa7a57d66b503745521e40948e83641de2a751b4a836da54f2da413074c3d856c954250b5c8332f1761e616437e527c0840bc57d522529b9259ccac34d7a3888f0aade0a66c392458cc1a698443052413217d29fbb9a1124797638d76100f82807934d58f30fcff33197fc171cfa3b0daa7f729591b1d7389ad476fde2328af74effd946265b3b81fa33066923db476f71babac30b590e05a7ba2b22f86925abca7ef8058c2481278dd9a240c8816bba6b5e6603e30670dffa7e6e3b995b0b18ec404614198a43a07897d84b439878d179c7d6895ac3f42ecb7998d4491060d2b8a5316110830c3f20a3d9a488a85976545917124c1eb6eb7314ea9696712b7bcab1cfd2b66e5a85106b2f651ab4b8a145e18ac41f39a394da9f327c5c92d4a297a0c94d1b8dcc3b111a700ac8d81c45f983ca029fd2887ad4113c7a23badf807c6d0068b4fa7148402aae15cc55971b57669a4840a22301caaec392a6ea6d46dab63890594d41545ebc2267297e3f4146073814bb3239b3e566684293b9732894193e71f3b388228641bb8be6f5847abb9072d269cb40b353b6aa3259ccb7e438d6a37ffa8cc1b7e4911575c41501321769900d19792aa3cfbe58b0aaf91c91d3b63900697279ad6c1aa44897a07d937e0d5826c24439420ca5d8a63630655ce9161e58d286fc885fcd9b19d096080225d16c89939a24aa1e98632d497b5604073b13f65bdfddc1de4b40d2a829b0521010c5f0f241b1ccc759049579db79983434fac2748829b33f001d0020a8e86c9d3958e0257c867e59c8082238a1ea0a9f2cac9e41f9b3cb0294f34b484a4a000100002900eb00c600c0afc8dade37ae62fa550c8aa50660d8e73585636748040b8e01d67161878276b1ec1ee2aff7614889bb6a36d2bdf9ca097ff6d7bf05c4de1d65c2b8db641f1c8dfbd59c9f7e0fed0b8e0394567eda55173d198e9ca40883b291ab4cada1a91ca8306ca1c37e047ebfe12b95164219b06a24711c2182f5e37374d43c668d45a3ca05eda90e90e510e628b4cfa7ae880502dae9a70a8eced26ad4b3c2f05d77f136cfaa622e40eb084dd3eb52e23a9aeff6ae9018100af38acfd1f6ce5d8c53c4a61c547258002120fe93e5c7a5c9c1a04bf06858c4dd52b01875844e15582dd566d03f41133183a0';
-  return new Uint8Array(hexStr.match(/.{1,2}/g).map(b => parseInt(b, 16)));
-}
-
-async function connectWithTimeout({ hostname, port }, timeout) {
-  const socket = connect({ hostname, port });
-  try {
-    await Promise.race([
-      socket.opened,
-      new Promise((_, reject) => setTimeout(() => reject(new Error("Connection timed out")), timeout)),
-    ]);
-    return socket;
-  } catch (err) {
-    socket.close?.();
-    throw err;
-  }
-}
-
-function readWithTimeout(reader, timeout) {
-  return new Promise(resolve => {
-    const timeoutId = setTimeout(() => resolve({ done: true, value: undefined, timedOut: true }), timeout);
-    reader.read().then(result => {
-      clearTimeout(timeoutId);
-      resolve({ ...result, timedOut: false });
-    });
-  });
+// --- UTILITY FUNCTIONS ---
+async function getIpInfo(ip) {
+    try {
+        const response = await fetch(`http://ip-api.com/json/${ip}?fields=status,message,country,countryCode,as&lang=en`);
+        if (!response.ok) return { country: 'N/A', countryCode: 'N/A', as: 'N/A' };
+        const data = await response.json();
+        if (data.status === 'fail') return { country: 'N/A', countryCode: 'N/A', as: 'N/A' };
+        return data;
+    } catch (e) {
+        return { country: 'N/A', countryCode: 'N/A', as: 'N/A' };
+    }
 }
 
 async function doubleHash(text) {
@@ -111,59 +126,6 @@ async function resolveDomain(domain) {
   }
 }
 
-async function checkProxyIP(proxyIPInput) {
-    let portRemote = 443;
-    let hostToCheck = proxyIPInput;
-
-    if (proxyIPInput.includes('.tp')) {
-        const portMatch = proxyIPInput.match(/\.tp(\d+)\./);
-        if (portMatch) portRemote = parseInt(portMatch[1], 10);
-        hostToCheck = proxyIPInput.split('.tp')[0];
-    } else if (proxyIPInput.includes('[') && proxyIPInput.includes(']:')) {
-        portRemote = parseInt(proxyIPInput.split(']:')[1], 10);
-        hostToCheck = proxyIPInput.split(']:')[0] + ']';
-    } else if (proxyIPInput.includes(':') && !proxyIPInput.startsWith('[')) {
-        const parts = proxyIPInput.split(':');
-        if (parts.length === 2 && parts[0].includes('.')) { 
-            hostToCheck = parts[0];
-            portRemote = parseInt(parts[1], 10) || 443;
-        }
-    }
-    
-    const result = await validateProxyIP(hostToCheck.replace(/\[|\]/g, ''), portRemote);
-
-    if (result.success) {
-        return {
-            success: true,
-            proxyIP: hostToCheck,
-            portRemote: portRemote,
-            statusCode: 200,
-            responseSize: result.responseTime,
-            timestamp: new Date().toISOString()
-        };
-    } else {
-        return {
-            success: false,
-            proxyIP: hostToCheck,
-            portRemote: portRemote,
-            timestamp: new Date().toISOString(),
-            error: result.message
-        };
-    }
-}
-
-async function getIpInfo(ip) {
-    try {
-        const response = await fetch(`http://ip-api.com/json/${ip}?fields=status,message,country,countryCode,as&lang=en`);
-        if (!response.ok) return { country: 'N/A', countryCode: 'N/A', as: 'N/A' };
-        const data = await response.json();
-        if (data.status === 'fail') return { country: 'N/A', countryCode: 'N/A', as: 'N/A' };
-        return data;
-    } catch (e) {
-        return { country: 'N/A', countryCode: 'N/A', as: 'N/A' };
-    }
-}
-
 function parseIPRangeServer(rangeInput) {
     const ips = [];
     const cidrMatch = rangeInput.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\/24$/);
@@ -186,7 +148,8 @@ function parseIPRangeServer(rangeInput) {
 const forgivingIPv4Regex = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
 const ipv6Regex = /(?:[A-F0-9]{1,4}:){7}[A-F0-9]{1,4}|\[(?:[A-F0-9]{1,4}:){7}[A-F0-9]{1,4}\]/gi;
 
-// --- HTML Page Generators ---
+// --- HTML Page Generators (Complete and Unabridged) ---
+// Note: These functions generate temporary pages for the bot's /file, /domain, etc. commands.
 
 function generateDomainCheckPageHTML({ domains, temporaryTOKEN }) {
     const domainsJson = JSON.stringify(domains);
@@ -257,17 +220,21 @@ function generateDomainCheckPageHTML({ domains, temporaryTOKEN }) {
             return data;
         }
 
-        function renderResult(item) {
+        function renderAllResults() {
             const container = document.getElementById('results-container');
-            if (successfulIPs.length === 1 && container.querySelector('p')) {
-                 container.innerHTML = '';
+            successfulIPs.sort((a, b) => (a.risk?.score || 999) - (b.risk?.score || 999));
+            
+            if (successfulIPs.length > 0) {
+                 container.innerHTML = ''; 
+                 successfulIPs.forEach(item => {
+                    const riskText = item.risk ? `${item.risk.emoji} ${item.risk.level} (${item.risk.score})` : '';
+                    const geoText = item.info ? `(${item.info.country} - ${item.info.as?.substring(0, 20)})` : '';
+                    const itemHTML = \`<div class="ip-item"><div><span class="ip-tag" onclick="copyToClipboard('${item.proxyIP}', this)">${item.proxyIP}</span></div><span class="ip-details">${riskText} ${geoText}</span></div>\`;
+                    container.insertAdjacentHTML('beforeend', itemHTML);
+                 });
+            } else if (checkedCount >= totalIPs) {
+                 container.innerHTML = '<p style="text-align:center;">No successful proxies found.</p>';
             }
-            const detailsParts = [];
-            if (item.info && item.info.country) detailsParts.push(item.info.country);
-            if (item.info && item.info.as) detailsParts.push(item.info.as);
-            const detailsText = detailsParts.length > 0 ? \`(\${detailsParts.join(' - ')})\` : '';
-            const itemHTML = \`<div class="ip-item"><span class="ip-tag" onclick="copyToClipboard('\${item.ip}', this)">\${item.ip}</span><span class="ip-details">\${detailsText}</span></div>\`;
-            container.insertAdjacentHTML('beforeend', itemHTML);
         }
 
         function updateSummary() {
@@ -307,12 +274,8 @@ function generateDomainCheckPageHTML({ domains, temporaryTOKEN }) {
                 const promises = batch.map(async (ip) => {
                     try {
                         const checkData = await fetchAPI('/check', new URLSearchParams({ proxyip: ip }));
-                        const ipInfo = checkData.success ? await fetchAPI('/ip-info', new URLSearchParams({ ip: checkData.proxyIP })) : null;
-                        
                         if (checkData.success) {
-                            const resultItem = { ip: checkData.proxyIP, success: checkData.success, info: ipInfo };
-                            successfulIPs.push(resultItem);
-                            renderResult(resultItem);
+                            successfulIPs.push({ ip: checkData.proxyIP, ...checkData });
                         }
                     } catch (e) {
                         console.error('Failed to check ip:', ip, e);
@@ -324,14 +287,12 @@ function generateDomainCheckPageHTML({ domains, temporaryTOKEN }) {
                 updateSummary();
             }
 
+            renderAllResults(); 
+            
             document.title = \`\${successfulIPs.length} Successful IPs Found\`;
             const actionContainer = document.getElementById('action-buttons-container');
-            if (successfulIPs.length === 0) {
-                 if (checkedCount >= totalIPs) {
-                    document.getElementById('results-container').innerHTML = '<p style="text-align:center;">No successful proxies found.</p>';
-                 }
-            } else {
-                 const successfulIPsText = successfulIPs.map(i=>i.ip).join('\\n');
+            if (successfulIPs.length > 0) {
+                 const successfulIPsText = successfulIPs.map(i=>i.proxyIP).join('\\n');
                  const dataUrl = \`data:text/plain;charset=utf-8;base64,\${btoa(unescape(encodeURIComponent(successfulIPsText)))}\`;
                  const downloadButton = \`<a href="\${dataUrl}" download="successful_ips.txt" class="btn btn-secondary">📥 Download Results</a>\`;
                  actionContainer.innerHTML = \`<div class="action-buttons">\${downloadButton}<button class="btn btn-primary" onclick='copyToClipboard(\${JSON.stringify(successfulIPsText)})'>📋 Copy All</button></div>\`;
@@ -429,19 +390,25 @@ function generateClientSideCheckPageHTML({ title, subtitleLabel, subtitleContent
             return data;
         }
 
-        function renderResult(item) {
+        function renderAllResults() {
             const container = document.getElementById('results-container');
-            if (successfulIPs.length === 1 && container.querySelector('p')) {
-                 container.innerHTML = '';
+            // *** NEW: Sorting logic ***
+            successfulIPs.sort((a, b) => (a.risk?.score || 999) - (b.risk?.score || 999));
+            
+            if (successfulIPs.length > 0) {
+                 container.innerHTML = ''; 
+                 successfulIPs.forEach(item => {
+                    // *** NEW: Display risk and geo info ***
+                    const riskText = item.risk ? `${item.risk.emoji} ${item.risk.level} (${item.risk.score})` : '';
+                    const geoText = item.info ? `(${item.info.country} - ${item.info.as?.substring(0, 20)})` : '';
+                    const itemHTML = \`<div class="ip-item"><div><span class="ip-tag" onclick="copyToClipboard('${item.proxyIP}', this)">${item.proxyIP}</span></div><span class="ip-details">${riskText} ${geoText}</span></div>\`;
+                    container.insertAdjacentHTML('beforeend', itemHTML);
+                 });
+            } else if (checkedCount >= ipsToCheck.length) {
+                 container.innerHTML = '<p style="text-align:center;">No successful proxies found.</p>';
             }
-            const detailsParts = [];
-            if (item.info && item.info.country) detailsParts.push(item.info.country);
-            if (item.info && item.info.as) detailsParts.push(item.info.as);
-            const detailsText = detailsParts.length > 0 ? \`(\${detailsParts.join(' - ')})\` : '';
-            const itemHTML = \`<div class="ip-item"><span class="ip-tag" onclick="copyToClipboard('\${item.ip}', this)">\${item.ip}</span><span class="ip-details">\${detailsText}</span></div>\`;
-            container.insertAdjacentHTML('beforeend', itemHTML);
         }
-
+        
         function updateSummary() {
             document.getElementById('summary').textContent = \`Checked: \${checkedCount} / \${ipsToCheck.length} | Successful: \${successfulIPs.length}\`;
         }
@@ -461,12 +428,12 @@ function generateClientSideCheckPageHTML({ title, subtitleLabel, subtitleContent
                 allResults = cachedData.results || {};
                 for(const ip in allResults) {
                     if(allResults[ip].success) {
-                        const resultItem = { ip: allResults[ip].ip, info: allResults[ip].info };
+                        const resultItem = { ip: ip, ...allResults[ip] };
                         successfulIPs.push(resultItem);
-                        renderResult(resultItem);
                     }
                 }
                 checkedCount = Object.keys(allResults).length;
+                if(successfulIPs.length > 0) renderAllResults();
                 updateSummary();
             } catch(e) { console.error("Error loading from cache", e); allResults = {}; }
         }
@@ -488,14 +455,10 @@ function generateClientSideCheckPageHTML({ title, subtitleLabel, subtitleContent
                 const promises = batch.map(async (ip) => {
                     try {
                         const checkData = await fetchAPI('/check', new URLSearchParams({ proxyip: ip }));
-                        const ipInfo = checkData.success ? await fetchAPI('/ip-info', new URLSearchParams({ ip: checkData.proxyIP })) : null;
-                        
-                        const resultItem = { ip: checkData.proxyIP, success: checkData.success, info: ipInfo };
-                        allResults[ip] = resultItem; 
+                        allResults[ip] = { success: checkData.success, info: checkData.info, risk: checkData.risk, ip: checkData.proxyIP }; 
 
                         if (checkData.success) {
-                            successfulIPs.push(resultItem);
-                            renderResult(resultItem);
+                            successfulIPs.push({ ip: ip, ...checkData });
                         }
                     } catch (e) {
                         console.error('Failed to check ip:', ip, e);
@@ -510,15 +473,13 @@ function generateClientSideCheckPageHTML({ title, subtitleLabel, subtitleContent
                 updateSummary();
             }
 
+            renderAllResults(); 
+
             document.title = \`\${successfulIPs.length} Successful IPs Found\`;
             const actionContainer = document.getElementById('action-buttons-container');
-            if (successfulIPs.length === 0) {
-                 if (Object.keys(allResults).length >= ipsToCheck.length) {
-                    document.getElementById('results-container').innerHTML = '<p style="text-align:center;">No successful proxies found.</p>';
-                 }
-            } else {
+            if (successfulIPs.length > 0) {
                  let downloadButton = '';
-                 const successfulIPsText = successfulIPs.map(i=>i.ip).join('\\n');
+                 const successfulIPsText = successfulIPs.map(i=>i.proxyIP).join('\\n');
                  if (pageType === 'file') {
                     const dataUrl = \`data:text/plain;charset=utf-8;base64,\${btoa(unescape(encodeURIComponent(successfulIPsText)))}\`;
                     downloadButton = \`<a href="\${dataUrl}" download="successful_ips.txt" class="btn btn-secondary">📥 Download Results</a>\`;
@@ -538,7 +499,7 @@ function generateClientSideCheckPageHTML({ title, subtitleLabel, subtitleContent
 </html>`;
 }
 
-// --- Client-Side Script for Main Page ---
+// Client-side script for the main page.
 const CLIENT_SCRIPT = `
     let isChecking = false;
     let TEMP_TOKEN = '';
@@ -642,9 +603,7 @@ const CLIENT_SCRIPT = `
         return response.json();
     }
 
-    const isIPAddress = (input) => /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/.test(input.split(':')[0].replace(/[\\[\\]]/g, ''));
-    const isDomain = (input) => /^(?!-)[a-zA-Z0-9-]+([\\-\\.]{1}[a-zA-Z0-9]+)*\\.[a-zA-Z]{2,}\$/.test(input.split(':')[0]);
-    const isIPRange = (input) => /^(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})\\/24$/.test(input) || /^(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.)(\\d{1,3})-(\\d{1,3})$/.test(input);
+    const isDomain = (input) => /^(?!-)[a-zA-Z0-9-]+([\\-\\.]{1}[a-zA-Z0-9]+)*\\.[a-zA-Z]{2,}$/.test(input.split(':')[0]);
 
     function parseIPRange(rangeInput) {
         const ips = [];
@@ -684,11 +643,9 @@ const CLIENT_SCRIPT = `
 
         try {
             if (mainInputs.length === 1 && rangeInputs.length === 0) {
-                const singleInput = mainInputs[0];
-                if (isDomain(singleInput)) await checkAndDisplayDomain_graphical(singleInput);
-                else if (isIPAddress(singleInput)) await checkAndDisplaySingleIP_graphical(singleInput);
-                else document.getElementById('result').innerHTML = '<div class="result-card result-error"><h3>❌ Unrecognized Format</h3></div>';
-            } else if (mainInputs.length > 1) {
+                // Handle single input for better UX
+                await processSingleInput(mainInputs[0]);
+            } else if (mainInputs.length > 0) {
                 await processMultipleInputs(mainInputs);
             }
             
@@ -703,93 +660,32 @@ const CLIENT_SCRIPT = `
         }
     }
     
-    async function checkAndDisplaySingleIP_graphical(proxyip) {
-        const resultDiv = document.getElementById('result');
-        resultDiv.innerHTML = '<div class="result-card"><p style="text-align:center;">Checking...</p></div>';
-        try {
-            const data = await fetchAPI('/check', new URLSearchParams({ proxyip }));
+    async function processSingleInput(input) {
+         const resultDiv = document.getElementById('result');
+         resultDiv.innerHTML = '<div class="result-card"><p style="text-align:center;">Checking...</p></div>';
+         try {
+            const data = await fetchAPI('/check', new URLSearchParams({ proxyip: input }));
             const resultCard = resultDiv.firstChild;
             if (data.success) {
-                const ipInfo = await fetchAPI('/ip-info', new URLSearchParams({ ip: data.proxyIP }));
                 resultCard.className = 'result-card result-success';
                 resultCard.innerHTML = \`
                     <h3>✅ Valid Proxy IP</h3>
-                    <p><strong>📍 IP Address:</strong> <span class="ip-tag" data-copy="\${data.proxyIP}">\${data.proxyIP}</span></p>
-                    <p><strong>🌍 Country:</strong> \${ipInfo.country || 'N/A'}</p>
-                    <p><strong>🌐 AS:</strong> \${ipInfo.as || 'N/A'}</p>
+                    <p><strong>IP Address:</strong> <span class="ip-tag" data-copy="\${data.proxyIP}">\${data.proxyIP}</span></p>
+                    <p><strong>⚠️ Risk:</strong> \${data.risk.emoji} \${data.risk.level} (Score: \${data.risk.score})</p>
+                    <p><strong>🌍 Country:</strong> \${data.info.country || 'N/A'}</p>
+                    <p><strong>🌐 AS:</strong> \${data.info.as || 'N/A'}</p>
                     <p><strong>🔌 Port:</strong> \${data.portRemote}</p>
-                    <p><strong>🕒 Check Time:</strong> \${new Date(data.timestamp).toLocaleString()}</p>
                 \`;
             } else {
                 resultCard.className = 'result-card result-error';
                 resultCard.innerHTML = \`
                     <h3>❌ Invalid Proxy IP</h3>
-                    <p><strong>📍 IP Address:</strong> <span class="ip-tag" data-copy="\${proxyip}">\${proxyip}</span></p>
+                    <p><strong>IP Address:</strong> <span class="ip-tag" data-copy="\${data.proxyIP}">\${data.proxyIP}</span></p>
                     <p><strong>Error:</strong> \${data.error || 'Check failed.'}</p>
-                    <p><strong>🕒 Check Time:</strong> \${new Date(data.timestamp).toLocaleString()}</p>
                 \`;
             }
         } catch (error) {
             resultDiv.innerHTML = \`<div class="result-card result-error"><h3>❌ Error</h3><p>\${error.message}</p></div>\`;
-        }
-    }
-    
-    async function checkAndDisplayDomain_graphical(domain) {
-        const resultDiv = document.getElementById('result');
-        resultDiv.innerHTML = '<div class="result-card"><p style="text-align:center;">Resolving & Checking...</p></div>';
-        const resultCard = resultDiv.firstChild;
-
-        try {
-            resultCard.className = 'result-card';
-            const resolveData = await fetchAPI('/resolve', new URLSearchParams({ domain }));
-            if (!resolveData.success || !resolveData.ips || resolveData.ips.length === 0) {
-                throw new Error(resolveData.error || 'Could not resolve domain.');
-            }
-            const ips = resolveData.ips;
-            resultCard.innerHTML = \`
-                <h3>Checking \${ips.length} IPs for \${domain}</h3>
-                <div class="domain-ip-list"></div>
-            \`;
-            const ipListDiv = resultCard.querySelector('.domain-ip-list');
-
-            let successCount = 0;
-            const successfulIPs = [];
-            const checkPromises = ips.map(async (ip, index) => {
-                const ipItem = document.createElement('div');
-                ipItem.className = 'ip-item-multi';
-                ipItem.innerHTML = \`<span class="ip-tag" data-copy="\${ip}">\${ip}</span><span class="ip-details" id="status-\${index}">🔄</span>\`;
-                ipListDiv.appendChild(ipItem);
-                
-                try {
-                    const checkData = await fetchAPI('/check', new URLSearchParams({ proxyip: ip }));
-                    const statusSpan = document.getElementById(\`status-\${index}\`);
-                    if (checkData.success) {
-                        successCount++;
-                        successfulIPs.push(checkData.proxyIP);
-                        const ipInfo = await fetchAPI('/ip-info', new URLSearchParams({ ip: ip }));
-                        statusSpan.innerHTML = \`✅ (\${ipInfo.country || 'N/A'} - \${ipInfo.as || 'N/A'})\`;
-                    } else {
-                        statusSpan.textContent = '❌';
-                    }
-                } catch(e) {
-                     document.getElementById(\`status-\${index}\`).textContent = '⚠️';
-                }
-            });
-
-            await Promise.all(checkPromises);
-
-            resultCard.classList.add(successCount > 0 ? 'result-success' : 'result-error');
-            resultCard.querySelector('h3').innerHTML = \`\${successCount > 0 ? '✅' : '❌'} \${successCount} of \${ips.length} IPs are valid for \${domain}\`;
-
-            if (successfulIPs.length > 0) {
-                const textToCopy = successfulIPs.join('\\n');
-                const actionButtonHTML = \`<div class="action-buttons"><button class="btn btn-primary" onclick='copyToClipboard(\${JSON.stringify(textToCopy)})'>📋 Copy All Successful IPs</button></div>\`;
-                resultCard.insertAdjacentHTML('beforeend', actionButtonHTML);
-            }
-
-        } catch (error) {
-            resultCard.className = 'result-card result-error';
-            resultCard.innerHTML = \`<h3>❌ Error</h3><p>\${error.message}</p>\`;
         }
     }
     
@@ -800,7 +696,7 @@ const CLIENT_SCRIPT = `
         const mainCard = resultDiv.querySelector('.result-card');
         
         const domains = mainInputs.filter(isDomain);
-        const directIPs = mainInputs.filter(isIPAddress);
+        const directIPs = mainInputs.filter(ip => !isDomain(ip));
         const numberEmojis = ['0️⃣', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣'];
         const formatNumber = (n) => (n).toString().split('').map(digit => numberEmojis[parseInt(digit)]).join('');
         
@@ -834,27 +730,28 @@ const CLIENT_SCRIPT = `
             try {
                 const checkData = await fetchAPI('/check', new URLSearchParams({ proxyip: ipObject.ip }));
                 if (checkData.success) {
-                    const ipInfo = await fetchAPI('/ip-info', new URLSearchParams({ ip: checkData.proxyIP }));
-                    return { ip: checkData.proxyIP, info: ipInfo, domainIndex: ipObject.domainIndex };
+                    return { ...checkData, domainIndex: ipObject.domainIndex };
                 }
             } catch (e) {}
             return null;
         });
 
-        const successfulIPs = (await Promise.all(checkPromises)).filter(Boolean);
+        let successfulIPs = (await Promise.all(checkPromises)).filter(Boolean);
+        successfulIPs.sort((a, b) => (a.risk?.score || 999) - (b.risk?.score || 999));
 
         if (successfulIPs.length > 0) {
             ipListContainer.innerHTML = '<h2>Successful IPs</h2>' + successfulIPs.map(item => {
-                const details = \`(\${item.info.country || 'N/A'} - \${item.info.as || 'N/A'})\`;
+                const geoDetails = \`(\${item.info.country || 'N/A'} - \${item.info.as?.substring(0, 20) || 'N/A'})\`;
+                const riskDetails = \`\${item.risk.emoji} \${item.risk.level} (\${item.risk.score})\`;
                 const prefix = item.domainIndex > -1 ? \`\${formatNumber(item.domainIndex + 1)} \` : '';
-                return \`<div class="ip-item-multi"><div>\${prefix}<span class="ip-tag" data-copy="\${item.ip}">\${item.ip}</span></div><span class="ip-details">\${details}</span></div>\`;
+                return \`<div class="ip-item-multi"><div>\${prefix}<span class="ip-tag" data-copy="\${item.proxyIP}">\${item.proxyIP}</span></div><span class="ip-details">\${riskDetails} - \${geoDetails}</span></div>\`;
             }).join('');
         } else {
             ipListContainer.innerHTML = '<p>No valid proxies found.</p>';
         }
 
         if (successfulIPs.length > 0) {
-            const textToCopy = successfulIPs.map(i => i.ip).join('\\n');
+            const textToCopy = successfulIPs.map(i => i.proxyIP).join('\\n');
             const actionButtonHTML = \`<div class="action-buttons"><button class="btn btn-primary" onclick='copyToClipboard(\${JSON.stringify(textToCopy)})'>📋 Copy All Successful IPs</button></div>\`;
             mainCard.insertAdjacentHTML('beforeend', actionButtonHTML);
         }
@@ -880,7 +777,6 @@ const CLIENT_SCRIPT = `
             return;
         }
 
-        let successCount = 0;
         let checkedCount = 0;
         const batchSize = 20;
 
@@ -888,18 +784,16 @@ const CLIENT_SCRIPT = `
             const batch = allIPsToTest.slice(i, i + batchSize);
             const batchPromises = batch.map(ip => 
                 fetchAPI('/check', new URLSearchParams({ proxyip: ip }))
-                    .then(async (data) => {
+                    .then(data => {
                         checkedCount++;
                         if (data.success) {
-                            successCount++;
-                            const ipInfo = await fetchAPI('/ip-info', new URLSearchParams({ ip: data.proxyIP }));
-                            currentSuccessfulRangeIPs.push({ ip: data.proxyIP, countryCode: ipInfo.countryCode || 'N/A' });
+                            currentSuccessfulRangeIPs.push({ ip: data.proxyIP, ...data });
                         }
                     })
                     .catch(err => { checkedCount++; })
             );
             await Promise.all(batchPromises);
-            summaryDiv.innerHTML = \`Tested: \${checkedCount}/\${allIPsToTest.length} | Successful: \${successCount}\`;
+            summaryDiv.innerHTML = \`Tested: \${checkedCount}/\${allIPsToTest.length} | Successful: \${currentSuccessfulRangeIPs.length}\`;
             updateSuccessfulRangeIPsDisplay();
         }
         
@@ -908,14 +802,16 @@ const CLIENT_SCRIPT = `
 
     function updateSuccessfulRangeIPsDisplay() {
         const listDiv = document.getElementById('successfulRangeIPsList');
+        currentSuccessfulRangeIPs.sort((a,b) => (a.risk?.score || 999) - (b.risk?.score || 999));
+        
         if (currentSuccessfulRangeIPs.length === 0) {
             listDiv.innerHTML = '<p style="text-align:center; color: var(--text-light);">No successful IPs found in range(s).</p>';
             return;
         }
         listDiv.innerHTML = currentSuccessfulRangeIPs.map(item => 
             \`<div class="ip-item-multi">
-                <span class="ip-tag" data-copy="\${item.ip}">\${item.ip}</span>
-                <span class="ip-details">\${item.countryCode}</span>
+                <div><span class="ip-tag" data-copy="\${item.proxyIP}">\${item.proxyIP}</span></div>
+                <span class="ip-details">\${item.risk.emoji} \${item.risk.level} (\${item.risk.score}) - \${item.info.countryCode || 'N/A'}</span>
             </div>\`
         ).join('');
     }
@@ -996,7 +892,7 @@ function generateMainHTML(faviconURL) {
       </div>
     </div>
     <div class="country-drawer">
-        <button id="drawer-toggle" class="drawer-toggle">Do You Need Proxy IP? Click Here</button>
+        <button id="drawer-toggle" class="drawer-toggle">Do You Need ProxyIP? Click Here</button>
         <div id="drawer-content" class="drawer-content">
             <div class="country-grid">
                 ${countryButtonsHTML}
@@ -1006,12 +902,12 @@ function generateMainHTML(faviconURL) {
     <div class="api-docs">
        <h3 style="margin-bottom:15px; text-align:center;">URL PATH Documentation</h3>
        <p><code>/proxyip/IP1,IP2,IP3,...</code></p>
-       <p><code>/iprange/127.0.0.0/24,127.0.0.0-225,...</code></p>
+       <p><code>/iprange/127.0.0.0/24,... or 127.0.0.0-255,...</code></p>
        <p><code>/file/https://your.file/ip1.txt or ip1.csv</code></p>
-        <p><code>/domain/domain1.com,domain2.com,...</code></p>
+       <p><code>/domain/domain1.com,domain2.com,...</code></p>
     </div>
     <footer class="footer">
-      <p>© ${year} Proxy IP Checker - By <strong>mehdi-hexing</strong></p>
+      <p>© 2025 Proxy IP Checker - By <strong>mehdi-hexing</strong></p>
     </footer>
   </div>
   <div id="toast" class="toast"></div>
@@ -1032,6 +928,7 @@ export default {
         const UA = request.headers.get('User-Agent') || 'null';
         const hostname = url.hostname;
         
+        // Handle dynamic pages for the bot
         if (path.toLowerCase().startsWith('/domain/')) {
             const domains_string = decodeURIComponent(path.substring('/domain/'.length));
             const domains = domains_string.split(',').map(s => s.trim()).filter(Boolean);
@@ -1101,6 +998,7 @@ export default {
             return new Response(CLIENT_SCRIPT, { headers: { "Content-Type": "application/javascript;charset=UTF-8" } });
         }
 
+        // Handle API routes
         if (path.toLowerCase().startsWith('/api/')) {
             const timestampForToken = Math.ceil(new Date().getTime() / (1000 * 60 * 31));
             const temporaryTOKEN = await doubleHash(hostname + timestampForToken + UA);
@@ -1125,7 +1023,7 @@ export default {
             if (path.toLowerCase() === '/api/check') {
                 const proxyIPInput = url.searchParams.get('proxyip');
                 if (!proxyIPInput) return new Response(JSON.stringify({success: false, error: 'Missing proxyip parameter'}), { status: 400, headers: { "Content-Type": "application/json" }});
-                const result = await checkProxyIP(proxyIPInput);
+                const result = await checkProxyIP(proxyIPInput, env);
                 return new Response(JSON.stringify(result), { status: 200, headers: { "Content-Type": "application/json" } });
             }
             
@@ -1139,48 +1037,6 @@ export default {
                     return new Response(JSON.stringify({ success: false, error: error.message }), { status: 500, headers: { "Content-Type": "application/json" } });
                 }
             }
-
-            if (path.toLowerCase() === '/api/ip-info') {
-                let ip = url.searchParams.get('ip') || request.headers.get('CF-Connecting-IP');
-                if (!ip) return new Response(JSON.stringify({success: false, error: 'IP parameter not provided'}), { status: 400, headers: { "Content-Type": "application/json" }});
-                if (ip.includes('[')) ip = ip.replace(/\[|\]/g, '');
-                const data = await getIpInfo(ip);
-                return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });
-            }
-
-            if (path.toLowerCase() === '/api/check_file') {
-                const targetUrl = url.searchParams.get('url');
-                if (!targetUrl || !targetUrl.startsWith('http')) {
-                    return new Response(JSON.stringify({ success: false, error: 'Invalid or missing URL parameter' }), { status: 400, headers: { "Content-Type": "application/json" } });
-                }
-                try {
-                    const response = await fetch(targetUrl, { headers: {'User-Agent': 'ProxyChecker/1.0'} });
-                    if (!response.ok) throw new Error(`Fetch failed: ${response.statusText}`);
-                    
-                    const text = await response.text();
-                    const foundIPs = [...new Set([...(text.match(forgivingIPv4Regex) || []), ...(text.match(ipv6Regex) || [])])];
-                    
-                    const ipsToCheck = foundIPs.filter(ip => {
-                        const parts = ip.split(':');
-                        return parts.length === 1 || !isNaN(parseInt(parts[parts.length - 1]));
-                    });
-
-                    const allResults = [];
-                    const batchSize = 20;
-                    for (let i = 0; i < ipsToCheck.length; i += batchSize) {
-                        const batch = ipsToCheck.slice(i, i + batchSize);
-                        const checkPromises = batch.map(ip => checkProxyIP(ip));
-                        const batchResults = await Promise.all(checkPromises);
-                        allResults.push(...batchResults);
-                    }
-                    
-                    const successfulIPs = allResults.filter(r => r.success).map(r => r.proxyIP);
-                    return new Response(JSON.stringify({ success: true, successful_ips: successfulIPs }), { headers: { "Content-Type": "application/json" } });
-
-                } catch (e) {
-                    return new Response(JSON.stringify({ success: false, error: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
-                }
-            }
             
             return new Response(JSON.stringify({success: false, error: 'API route not found'}), { status: 404, headers: { "Content-Type": "application/json" } });
         }
@@ -1191,6 +1047,7 @@ export default {
             return Response.redirect(faviconURL, 302);
         }
         
+        // Main page handler
         if (path === '/') {
             return new Response(generateMainHTML(faviconURL), {
                 headers: { "content-type": "text/html;charset=UTF-8" }
