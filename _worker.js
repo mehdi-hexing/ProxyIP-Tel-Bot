@@ -1,6 +1,5 @@
 import { connect } from 'cloudflare:sockets';
 
-// --- main logic integrated
 async function checkProxyIP(proxyIPInput, env) {
     try {
         const proxyCheckResponse = await fetch(`http://zero000.serv00.net:33163/api/v1/check?proxy=${encodeURIComponent(proxyIPInput)}`);
@@ -69,19 +68,6 @@ async function checkProxyIP(proxyIPInput, env) {
     }
 }
 
-// --- UTILITY FUNCTIONS ---
-async function getIpInfo(ip) {
-    try {
-        const response = await fetch(`http://ip-api.com/json/${ip}?fields=status,message,country,countryCode,as&lang=en`);
-        if (!response.ok) return { country: 'N/A', countryCode: 'N/A', as: 'N/A' };
-        const data = await response.json();
-        if (data.status === 'fail') return { country: 'N/A', countryCode: 'N/A', as: 'N/A' };
-        return data;
-    } catch (e) {
-        return { country: 'N/A', countryCode: 'N/A', as: 'N/A' };
-    }
-}
-
 async function doubleHash(text) {
   const encoder = new TextEncoder();
   const firstHashBuffer = await crypto.subtle.digest('MD5', encoder.encode(text));
@@ -126,6 +112,18 @@ async function resolveDomain(domain) {
   }
 }
 
+async function getIpInfo(ip) {
+    try {
+        const response = await fetch(`http://ip-api.com/json/${ip}?fields=status,message,country,countryCode,as&lang=en`);
+        if (!response.ok) return { country: 'N/A', countryCode: 'N/A', as: 'N/A' };
+        const data = await response.json();
+        if (data.status === 'fail') return { country: 'N/A', countryCode: 'N/A', as: 'N/A' };
+        return data;
+    } catch (e) {
+        return { country: 'N/A', countryCode: 'N/A', as: 'N/A' };
+    }
+}
+
 function parseIPRangeServer(rangeInput) {
     const ips = [];
     const cidrMatch = rangeInput.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\/24$/);
@@ -148,8 +146,7 @@ function parseIPRangeServer(rangeInput) {
 const forgivingIPv4Regex = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
 const ipv6Regex = /(?:[A-F0-9]{1,4}:){7}[A-F0-9]{1,4}|\[(?:[A-F0-9]{1,4}:){7}[A-F0-9]{1,4}\]/gi;
 
-// --- HTML Page Generators (Complete and Unabridged) ---
-// Note: These functions generate temporary pages for the bot's /file, /domain, etc. commands.
+// --- HTML Page Generators ---
 
 function generateDomainCheckPageHTML({ domains, temporaryTOKEN }) {
     const domainsJson = JSON.stringify(domains);
@@ -227,9 +224,11 @@ function generateDomainCheckPageHTML({ domains, temporaryTOKEN }) {
             if (successfulIPs.length > 0) {
                  container.innerHTML = ''; 
                  successfulIPs.forEach(item => {
-                    const riskText = item.risk ? `${item.risk.emoji} ${item.risk.level} (${item.risk.score})` : '';
-                    const geoText = item.info ? `(${item.info.country} - ${item.info.as?.substring(0, 20)})` : '';
-                    const itemHTML = \`<div class="ip-item"><div><span class="ip-tag" onclick="copyToClipboard('${item.proxyIP}', this)">${item.proxyIP}</span></div><span class="ip-details">${riskText} ${geoText}</span></div>\`;
+                    const riskText = item.risk ? \`\${item.risk.emoji} \${item.risk.level} (\${item.risk.score})\` : '';
+                    const geoText = item.info ? \`(\${item.info.country} - \${item.info.as?.substring(0, 20)})\` : '';
+                    const itemHTML = \`<div class="ip-item">\` + 
+                                     \`<div><span class="ip-tag" onclick="copyToClipboard('\${item.ip}', this)">\${item.ip}</span></div>\` +
+                                     \`<span class="ip-details">\${riskText} \${geoText}</span></div>\`;
                     container.insertAdjacentHTML('beforeend', itemHTML);
                  });
             } else if (checkedCount >= totalIPs) {
@@ -292,7 +291,7 @@ function generateDomainCheckPageHTML({ domains, temporaryTOKEN }) {
             document.title = \`\${successfulIPs.length} Successful IPs Found\`;
             const actionContainer = document.getElementById('action-buttons-container');
             if (successfulIPs.length > 0) {
-                 const successfulIPsText = successfulIPs.map(i=>i.proxyIP).join('\\n');
+                 const successfulIPsText = successfulIPs.map(i=>i.ip).join('\\n');
                  const dataUrl = \`data:text/plain;charset=utf-8;base64,\${btoa(unescape(encodeURIComponent(successfulIPsText)))}\`;
                  const downloadButton = \`<a href="\${dataUrl}" download="successful_ips.txt" class="btn btn-secondary">📥 Download Results</a>\`;
                  actionContainer.innerHTML = \`<div class="action-buttons">\${downloadButton}<button class="btn btn-primary" onclick='copyToClipboard(\${JSON.stringify(successfulIPsText)})'>📋 Copy All</button></div>\`;
@@ -392,16 +391,16 @@ function generateClientSideCheckPageHTML({ title, subtitleLabel, subtitleContent
 
         function renderAllResults() {
             const container = document.getElementById('results-container');
-            // *** NEW: Sorting logic ***
             successfulIPs.sort((a, b) => (a.risk?.score || 999) - (b.risk?.score || 999));
             
             if (successfulIPs.length > 0) {
                  container.innerHTML = ''; 
                  successfulIPs.forEach(item => {
-                    // *** NEW: Display risk and geo info ***
-                    const riskText = item.risk ? `${item.risk.emoji} ${item.risk.level} (${item.risk.score})` : '';
-                    const geoText = item.info ? `(${item.info.country} - ${item.info.as?.substring(0, 20)})` : '';
-                    const itemHTML = \`<div class="ip-item"><div><span class="ip-tag" onclick="copyToClipboard('${item.proxyIP}', this)">${item.proxyIP}</span></div><span class="ip-details">${riskText} ${geoText}</span></div>\`;
+                    const riskText = item.risk ? \`\${item.risk.emoji} \${item.risk.level} (\${item.risk.score})\` : '';
+                    const geoText = item.info ? \`(\${item.info.country} - \${item.info.as?.substring(0, 20)})\` : '';
+                    const itemHTML = \`<div class="ip-item">\` + 
+                                     \`<div><span class="ip-tag" onclick="copyToClipboard('\${item.ip}', this)">\${item.ip}</span></div>\` +
+                                     \`<span class="ip-details">\${riskText} \${geoText}</span></div>\`;
                     container.insertAdjacentHTML('beforeend', itemHTML);
                  });
             } else if (checkedCount >= ipsToCheck.length) {
@@ -479,7 +478,7 @@ function generateClientSideCheckPageHTML({ title, subtitleLabel, subtitleContent
             const actionContainer = document.getElementById('action-buttons-container');
             if (successfulIPs.length > 0) {
                  let downloadButton = '';
-                 const successfulIPsText = successfulIPs.map(i=>i.proxyIP).join('\\n');
+                 const successfulIPsText = successfulIPs.map(i=>i.ip).join('\\n');
                  if (pageType === 'file') {
                     const dataUrl = \`data:text/plain;charset=utf-8;base64,\${btoa(unescape(encodeURIComponent(successfulIPsText)))}\`;
                     downloadButton = \`<a href="\${dataUrl}" download="successful_ips.txt" class="btn btn-secondary">📥 Download Results</a>\`;
@@ -499,7 +498,7 @@ function generateClientSideCheckPageHTML({ title, subtitleLabel, subtitleContent
 </html>`;
 }
 
-// Client-side script for the main page.
+// --- Client-Side Script for Main Page ---
 const CLIENT_SCRIPT = `
     let isChecking = false;
     let TEMP_TOKEN = '';
@@ -603,7 +602,9 @@ const CLIENT_SCRIPT = `
         return response.json();
     }
 
+    const isIPAddress = (input) => /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/.test(input.split(':')[0].replace(/[\\[\\]]/g, ''));
     const isDomain = (input) => /^(?!-)[a-zA-Z0-9-]+([\\-\\.]{1}[a-zA-Z0-9]+)*\\.[a-zA-Z]{2,}$/.test(input.split(':')[0]);
+    const isIPRange = (input) => /^(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})\\/24$/.test(input) || /^(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.)(\\d{1,3})-(\\d{1,3})$/.test(input);
 
     function parseIPRange(rangeInput) {
         const ips = [];
@@ -643,8 +644,9 @@ const CLIENT_SCRIPT = `
 
         try {
             if (mainInputs.length === 1 && rangeInputs.length === 0) {
-                // Handle single input for better UX
-                await processSingleInput(mainInputs[0]);
+                const singleInput = mainInputs[0];
+                if (isDomain(singleInput)) await checkAndDisplayDomain_graphical(singleInput);
+                else await checkAndDisplaySingleIP_graphical(singleInput);
             } else if (mainInputs.length > 0) {
                 await processMultipleInputs(mainInputs);
             }
@@ -660,11 +662,11 @@ const CLIENT_SCRIPT = `
         }
     }
     
-    async function processSingleInput(input) {
-         const resultDiv = document.getElementById('result');
-         resultDiv.innerHTML = '<div class="result-card"><p style="text-align:center;">Checking...</p></div>';
-         try {
-            const data = await fetchAPI('/check', new URLSearchParams({ proxyip: input }));
+    async function checkAndDisplaySingleIP_graphical(proxyip) {
+        const resultDiv = document.getElementById('result');
+        resultDiv.innerHTML = '<div class="result-card"><p style="text-align:center;">Checking...</p></div>';
+        try {
+            const data = await fetchAPI('/check', new URLSearchParams({ proxyip }));
             const resultCard = resultDiv.firstChild;
             if (data.success) {
                 resultCard.className = 'result-card result-success';
@@ -680,12 +682,67 @@ const CLIENT_SCRIPT = `
                 resultCard.className = 'result-card result-error';
                 resultCard.innerHTML = \`
                     <h3>❌ Invalid Proxy IP</h3>
-                    <p><strong>IP Address:</strong> <span class="ip-tag" data-copy="\${data.proxyIP}">\${data.proxyIP}</span></p>
+                    <p><strong>IP Address:</strong> <span class="ip-tag" data-copy="\${proxyip}">\${proxyip}</span></p>
                     <p><strong>Error:</strong> \${data.error || 'Check failed.'}</p>
                 \`;
             }
         } catch (error) {
             resultDiv.innerHTML = \`<div class="result-card result-error"><h3>❌ Error</h3><p>\${error.message}</p></div>\`;
+        }
+    }
+    
+    async function checkAndDisplayDomain_graphical(domain) {
+        const resultDiv = document.getElementById('result');
+        resultDiv.innerHTML = '<div class="result-card"><p style="text-align:center;">Resolving & Checking...</p></div>';
+        const resultCard = resultDiv.firstChild;
+
+        try {
+            resultCard.className = 'result-card';
+            const resolveData = await fetchAPI('/resolve', new URLSearchParams({ domain }));
+            if (!resolveData.success || !resolveData.ips || resolveData.ips.length === 0) {
+                throw new Error(resolveData.error || 'Could not resolve domain.');
+            }
+            const ips = resolveData.ips;
+            resultCard.innerHTML = \`
+                <h3>Checking \${ips.length} IPs for \${domain}</h3>
+                <div class="domain-ip-list"></div>
+            \`;
+            const ipListDiv = resultCard.querySelector('.domain-ip-list');
+            ipListDiv.innerHTML = '<p style="text-align:center;">Checking IPs...</p>';
+
+            let successfulIPs = [];
+            const checkPromises = ips.map(ip => 
+                fetchAPI('/check', new URLSearchParams({ proxyip: ip }))
+                    .then(data => { if (data.success) successfulIPs.push({ ip, ...data }); })
+                    .catch(e => {})
+            );
+
+            await Promise.all(checkPromises);
+
+            successfulIPs.sort((a, b) => a.risk.score - b.risk.score);
+            
+            ipListDiv.innerHTML = ''; 
+
+            successfulIPs.forEach(item => {
+                 const details = \`\${item.risk.emoji} \${item.risk.level} (\${item.risk.score}) - (\${item.info.country || 'N/A'} - \${item.info.as?.substring(0,20) || 'N/A'})\`;
+                 const ipItem = document.createElement('div');
+                 ipItem.className = 'ip-item-multi';
+                 ipItem.innerHTML = \`<div><span class="ip-tag" data-copy="\${item.proxyIP}">\${item.proxyIP}</span></div><span class="ip-details">\${details}</span>\`;
+                 ipListDiv.appendChild(ipItem);
+            });
+            
+            resultCard.classList.add(successfulIPs.length > 0 ? 'result-success' : 'result-error');
+            resultCard.querySelector('h3').innerHTML = \`\${successfulIPs.length > 0 ? '✅' : '❌'} \${successfulIPs.length} of \${ips.length} IPs are valid for \${domain}\`;
+
+            if (successfulIPs.length > 0) {
+                const textToCopy = successfulIPs.map(i => i.proxyIP).join('\\n');
+                const actionButtonHTML = \`<div class="action-buttons"><button class="btn btn-primary" onclick='copyToClipboard(\${JSON.stringify(textToCopy)})'>📋 Copy All Successful IPs</button></div>\`;
+                resultCard.insertAdjacentHTML('beforeend', actionButtonHTML);
+            }
+
+        } catch (error) {
+            resultCard.className = 'result-card result-error';
+            resultCard.innerHTML = \`<h3>❌ Error</h3><p>\${error.message}</p>\`;
         }
     }
     
@@ -737,7 +794,8 @@ const CLIENT_SCRIPT = `
         });
 
         let successfulIPs = (await Promise.all(checkPromises)).filter(Boolean);
-        successfulIPs.sort((a, b) => (a.risk?.score || 999) - (b.risk?.score || 999));
+        successfulIPs.sort((a, b) => a.risk.score - b.risk.score);
+
 
         if (successfulIPs.length > 0) {
             ipListContainer.innerHTML = '<h2>Successful IPs</h2>' + successfulIPs.map(item => {
@@ -802,7 +860,7 @@ const CLIENT_SCRIPT = `
 
     function updateSuccessfulRangeIPsDisplay() {
         const listDiv = document.getElementById('successfulRangeIPsList');
-        currentSuccessfulRangeIPs.sort((a,b) => (a.risk?.score || 999) - (b.risk?.score || 999));
+        currentSuccessfulRangeIPs.sort((a,b) => a.risk.score - b.risk.score);
         
         if (currentSuccessfulRangeIPs.length === 0) {
             listDiv.innerHTML = '<p style="text-align:center; color: var(--text-light);">No successful IPs found in range(s).</p>';
@@ -810,7 +868,7 @@ const CLIENT_SCRIPT = `
         }
         listDiv.innerHTML = currentSuccessfulRangeIPs.map(item => 
             \`<div class="ip-item-multi">
-                <div><span class="ip-tag" data-copy="\${item.proxyIP}">\${item.proxyIP}</span></div>
+                <div><span class="ip-tag" data-copy="\${item.ip}">\${item.ip}</span></div>
                 <span class="ip-details">\${item.risk.emoji} \${item.risk.level} (\${item.risk.score}) - \${item.info.countryCode || 'N/A'}</span>
             </div>\`
         ).join('');
@@ -907,7 +965,7 @@ function generateMainHTML(faviconURL) {
        <p><code>/domain/domain1.com,domain2.com,...</code></p>
     </div>
     <footer class="footer">
-      <p>© 2025 Proxy IP Checker - By <strong>mehdi-hexing</strong></p>
+      <p>© ${year} Proxy IP Checker - By <strong>mehdi-hexing</strong></p>
     </footer>
   </div>
   <div id="toast" class="toast"></div>
@@ -920,6 +978,7 @@ function generateMainHTML(faviconURL) {
 </html>`;
 }
 
+
 // --- Main Fetch Handler ---
 export default {
     async fetch(request, env, ctx) {
@@ -928,7 +987,6 @@ export default {
         const UA = request.headers.get('User-Agent') || 'null';
         const hostname = url.hostname;
         
-        // Handle dynamic pages for the bot
         if (path.toLowerCase().startsWith('/domain/')) {
             const domains_string = decodeURIComponent(path.substring('/domain/'.length));
             const domains = domains_string.split(',').map(s => s.trim()).filter(Boolean);
@@ -998,7 +1056,6 @@ export default {
             return new Response(CLIENT_SCRIPT, { headers: { "Content-Type": "application/javascript;charset=UTF-8" } });
         }
 
-        // Handle API routes
         if (path.toLowerCase().startsWith('/api/')) {
             const timestampForToken = Math.ceil(new Date().getTime() / (1000 * 60 * 31));
             const temporaryTOKEN = await doubleHash(hostname + timestampForToken + UA);
@@ -1047,7 +1104,6 @@ export default {
             return Response.redirect(faviconURL, 302);
         }
         
-        // Main page handler
         if (path === '/') {
             return new Response(generateMainHTML(faviconURL), {
                 headers: { "content-type": "text/html;charset=UTF-8" }
