@@ -123,7 +123,7 @@ Finally, run the Python bot on your server.
 
 1.  **Connect to Your Server** and clone your forked repository:
     ```bash
-    git clone [https://github.com/YOUR_USERNAME/ProxyIP-Tel-Bot.git](https://github.com/YOUR_USERNAME/ProxyIP-Tel-Bot.git)
+    git clone [https://github.com/mehdi-hexing/ProxyIP-Tel-Bot.git](https://github.com/mehdi-hexing/ProxyIP-Tel-Bot.git)
     cd ProxyIP-Tel-Bot
     ```
 2.  **Install Dependencies:**
@@ -136,7 +136,6 @@ Finally, run the Python bot on your server.
     * **Temporary (current session only):**
         ```bash
         export BOT_TOKEN="YOUR_TELEGRAM_BOT_TOKEN"
-        export WORKER_URL="[https://your-bot-worker.pages.dev](https://your-bot-worker.pages.dev)"
         ```
     * **Permanent (recommended):** Add the `export` lines to your `~/.bashrc` or `~/.profile` file, then run `source ~/.bashrc`.
 
@@ -144,12 +143,10 @@ Finally, run the Python bot on your server.
     * **Command Prompt (Temporary):**
         ```cmd
         set BOT_TOKEN="YOUR_TELEGRAM_BOT_TOKEN"
-        set WORKER_URL="[https://your-bot-worker.pages.dev](https://your-bot-worker.pages.dev)"
         ```
     * **PowerShell (Temporary):**
         ```powershell
         $env:BOT_TOKEN="YOUR_TELEGRAM_BOT_TOKEN"
-        $env:WORKER_URL="[https://your-bot-worker.pages.dev](https://your-bot-worker.pages.dev)"
         ```
 
 4.  **Run the Bot Persistently:**
