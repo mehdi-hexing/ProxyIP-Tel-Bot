@@ -1,60 +1,32 @@
-# In 31 Mordad of 1405, this project was completed and thanks to Dìana for Free Proxy IPs.
-# 17:00 PM
+
+import os
+import logging
+import uuid
 import asyncio
+import httpx
 import io
+import re
 import ipaddress
 import json
-import logging
-import os
-import re
-import socket
-import uuid
-
-import httpx
-import pycountry
-import uvicorn
-from curl_cffi.const import CurlOpt
-from curl_cffi.requests import AsyncSession
-from fastapi import FastAPI, Query
-from fastapi.responses import JSONResponse
-from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.constants import ChatMemberStatus, ChatType, ParseMode
+import html
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
+from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, ConversationHandler, MessageHandler, filters
+from telegram.constants import ParseMode, ChatType, ChatMemberStatus
 from telegram.error import BadRequest
-from telegram.ext import (
-    Application,
-    CallbackQueryHandler,
-    CommandHandler,
-    ContextTypes,
-    ConversationHandler,
-    MessageHandler,
-    filters,
-)
 from termcolor import cprint
-
-# ============================================================================
-# Configuration
-# ============================================================================
-PORT = int(os.environ.get("PORT", 8000))
-CONCURRENCY_LIMIT = 30
-semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
-
-# /meta is behind Cloudflare's Bot Management (blocks non-browser clients
-# outright, even with a matching TLS fingerprint). /cdn-cgi/trace is the
-# lightweight, unprotected diagnostic endpoint used by proxy-checker tools.
-IP_RESOLVER = "speed.cloudflare.com"
-PATH_RESOLVER = "/cdn-cgi/trace"
-TIMEOUT = 10
-
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-DB_FILE = "bot_data.json"
-MESSAGE_ENTITY_LIMIT = 45
-RISK_SCORE_URL_TEMPLATE = "https://cloudflare-scamalytics.pages.dev/{ip}"
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
+
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
+WORKER_URL = "https://check80.pages.dev"
+
+DB_FILE = "bot_data.json"
+MESSAGE_ENTITY_LIMIT = 45
+RISK_SCORE_URL_TEMPLATE = "https://cloudflare-scamalytics.pages.dev/{ip}"
 
 AWAIT_MAIN_INPUT = 0
 SELECT_ADD_TYPE, AWAIT_CHAT_ID, AWAIT_ADD_CONFIRMATION, AWAIT_CHAT_NAME = range(1, 5)
@@ -70,231 +42,6 @@ COUNTRY_URLS = {"ALL": "https://raw.githubusercontent.com/NiREvil/vless/main/sub
 COUNTRY_FILE_BASE_URL = "https://raw.githubusercontent.com/NiREvil/vless/main/sub/country_proxies/"
 NUMBER_EMOJIS = ['0️⃣', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣']
 
-
-# ============================================================================
-# Core checking engine (from checker.py)
-# ============================================================================
-def parse_trace(text):
-    """Parse Cloudflare's /cdn-cgi/trace plaintext key=value response."""
-    data = {}
-    for line in text.strip().splitlines():
-        if "=" in line:
-            key, _, value = line.partition("=")
-            data[key.strip()] = value.strip()
-    return data
-
-
-def parse_proxyip_input(proxyip: str):
-    """Parse a proxyip string into (host, port).
-
-    Accepts:
-      - IPv4:            "1.2.3.4"            -> ("1.2.3.4", 443)
-      - IPv4:port:        "1.2.3.4:8443"        -> ("1.2.3.4", 8443)
-      - bare IPv6:         "2001:db8::1"         -> ("2001:db8::1", 443)
-      - bracketed IPv6:     "[2001:db8::1]"        -> ("2001:db8::1", 443)
-      - bracketed IPv6:port: "[2001:db8::1]:8443"    -> ("2001:db8::1", 8443)
-      - hostname / hostname:port are also supported.
-    A bare (unbracketed) IPv6 address is detected by having 2+ colons,
-    since only IPv6 literals legitimately contain more than one.
-    """
-    proxyip = proxyip.strip()
-
-    if proxyip.startswith('['):
-        if ']:' in proxyip:
-            ip_part, port_str = proxyip.rsplit(']:', 1)
-            return ip_part[1:], int(port_str)
-        return proxyip.strip('[]'), 443
-
-    if proxyip.count(':') >= 2:
-        # Bare IPv6 literal, no port possible without brackets.
-        return proxyip, 443
-
-    if ':' in proxyip:
-        ip, port_str = proxyip.rsplit(':', 1)
-        return ip, int(port_str)
-
-    return proxyip, 443
-
-
-async def get_hosting_provider(ip):
-    try:
-        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-            response = await client.get(f"http://ip-api.com/json/{ip}?fields=as")
-            response.raise_for_status()
-            data = response.json()
-            return data.get("as")
-    except (httpx.RequestError, json.JSONDecodeError):
-        return None
-
-
-async def get_direct_ip():
-    """Baseline (no-proxy) public IP, via a plain IP-echo service."""
-    urls = [
-        "https://api.ipify.org?format=json",
-        "https://api64.ipify.org?format=json",
-    ]
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        for url in urls:
-            try:
-                response = await client.get(url)
-                response.raise_for_status()
-                ip = response.json().get("ip")
-                if ip:
-                    return ip
-            except (httpx.RequestError, json.JSONDecodeError, httpx.HTTPStatusError):
-                pass
-    return None
-
-
-async def check(host, path, proxy_ip=None, proxy_port=443):
-    """Fetch https://{host}{path}, optionally forcing the TCP connection to
-    proxy_ip:proxy_port while keeping SNI/Host as `host` (the 'ProxyIP'
-    trick), then parse the cdn-cgi/trace key=value response."""
-    url = f"https://{host}{path}"
-    curl_options = {}
-    if proxy_ip:
-        # libcurl's CURLOPT_RESOLVE requires IPv6 literals to be bracketed
-        # in the ADDRESS field (HOST:PORT:[ADDRESS]), unlike IPv4/hostnames.
-        resolve_addr = f"[{proxy_ip}]" if ':' in proxy_ip else proxy_ip
-        curl_options[CurlOpt.RESOLVE] = [f"{host}:{proxy_port}:{resolve_addr}"]
-
-    start = asyncio.get_event_loop().time()
-    try:
-        async with AsyncSession(curl_options=curl_options) as session:
-            resp = await session.get(
-                url,
-                impersonate="chrome",
-                timeout=TIMEOUT,
-            )
-            delay = (asyncio.get_event_loop().time() - start) * 1000
-
-            if resp.status_code != 200:
-                return {"error": f"HTTP {resp.status_code}"}, 0
-
-            parsed = parse_trace(resp.text)
-            if not parsed.get("ip"):
-                return {"error": "Malformed trace response"}, 0
-
-            return parsed, delay
-    except Exception as e:
-        return {"error": f"{type(e).__name__}: {e}" if str(e) else type(e).__name__}, 0
-
-
-async def process_proxy(ip, port):
-    direct_ip = await get_direct_ip()
-    proxy_meta, proxy_delay = await check(IP_RESOLVER, PATH_RESOLVER, proxy_ip=ip, proxy_port=port)
-
-    proxy_ip_result = proxy_meta.get('ip')
-    is_alive = bool(direct_ip and proxy_ip_result and direct_ip != proxy_ip_result)
-
-    if is_alive:
-        final_org_name = await get_hosting_provider(ip)
-        if not final_org_name:
-            final_org_name = "Unknown"
-
-        country_code = proxy_meta.get("loc", "Unknown")
-        country = pycountry.countries.get(alpha_2=country_code)
-        country_name = country.name if country else "Unknown"
-
-        return {
-            "ip": ip, "port": port, "proxyip": True,
-            "asOrganization": final_org_name, "countryCode": country_code,
-            "countryName": country_name,
-            "colo": proxy_meta.get("colo", "Unknown"),
-            "message": f"Success: IP changed from {direct_ip} to {proxy_ip_result}.",
-            "ping": f"{round(proxy_delay)}",
-            "httpProtocol": proxy_meta.get("http", "Unknown"),
-            "tls": proxy_meta.get("tls", "Unknown"),
-        }
-    else:
-        reason = "IP did not change or a connection failed."
-        if not direct_ip:
-            reason = "Direct IP lookup failed (could not reach ipify)."
-        elif not proxy_ip_result:
-            reason = f"Proxy connection failed: {proxy_meta.get('error', 'Unknown')}"
-        elif direct_ip == proxy_ip_result:
-            reason = f"IP did not change. Both connections showed IP: {direct_ip}"
-        return {"ip": ip, "port": port, "proxyip": False, "message": reason}
-
-
-async def resolve_domain(domain: str) -> list[str]:
-    """Resolve a domain name to its IPv4 addresses.
-
-    Replaces the old external `{WORKER_URL}/api/resolve` call — DNS
-    resolution now happens locally instead of round-tripping to a
-    Cloudflare Worker.
-    """
-    loop = asyncio.get_event_loop()
-    try:
-        infos = await loop.run_in_executor(
-            None, socket.getaddrinfo, domain, None, socket.AF_INET
-        )
-        return sorted({info[4][0] for info in infos})
-    except socket.gaierror as e:
-        logger.error(f"DNS resolution failed for {domain}: {e}")
-        return []
-
-
-async def validate_proxy(ip_obj: dict | str) -> dict | None:
-    """Run the local checking engine for one IP and translate the result
-    into the shape the bot's formatting code expects (this used to be a
-    call to the external Worker's /api/check)."""
-    proxy_address = ip_obj['ip'] if isinstance(ip_obj, dict) else ip_obj
-    try:
-        ip, port = parse_proxyip_input(proxy_address)
-    except ValueError:
-        return None
-
-    async with semaphore:
-        result = await process_proxy(ip, port)
-
-    if not result.get("proxyip"):
-        return None
-
-    ip_display = f"[{result['ip']}]" if result['ip'].count(':') >= 2 else result['ip']
-    data = {
-        "success": True,
-        "proxyIP": f"{ip_display}:{result['port']}",
-        "ping": result.get("ping"),
-        "info": {
-            "as": result.get("asOrganization", "N/A"),
-            "country": result.get("countryName", "N/A"),
-        },
-    }
-    if isinstance(ip_obj, dict):
-        data.update(ip_obj)
-        data["proxyIP"] = f"{ip_display}:{result['port']}"
-    return data
-
-
-# ============================================================================
-# FastAPI app (public HTTP API for the same checking engine)
-# ============================================================================
-app = FastAPI(
-    title="Production Proxy Checker API",
-    description="Validates a proxy and returns its full details.",
-    version="15.0.0"
-)
-
-
-@app.get("/api/v1/check", tags=["Proxy Checker"])
-async def check_proxy_endpoint(
-    proxyip: str = Query(..., description="The proxy to check in 'IP' or 'IP:PORT' format.", example="36.95.152.58")
-):
-    async with semaphore:
-        try:
-            ip, port_number = parse_proxyip_input(proxyip)
-            result_data = await process_proxy(ip, port_number)
-            return JSONResponse(content=result_data)
-        except ValueError:
-            return JSONResponse(status_code=400, content={"proxyip": False, "error": "Invalid port format."})
-        except Exception as e:
-            return JSONResponse(status_code=500, content={"proxyip": False, "error": f"An unexpected internal server error occurred: {e}"})
-
-
-# ============================================================================
-# Bot data persistence & maintenance (from checkerbot.py)
-# ============================================================================
 def load_db():
     try:
         with open(DB_FILE, 'r') as f:
@@ -302,16 +49,14 @@ def load_db():
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
 
-
 def save_db(data):
     with open(DB_FILE, 'w') as f:
         json.dump(data, f, indent=4)
 
-
 async def cleanup_deleted_users(context: ContextTypes.DEFAULT_TYPE):
     logger.info("Running scheduled job: Cleaning up deleted users...")
     db = load_db()
-
+    
     user_ids_to_check = list(db.keys())
     if not user_ids_to_check:
         logger.info("Cleanup job: Database is empty. Nothing to do.")
@@ -337,7 +82,6 @@ async def cleanup_deleted_users(context: ContextTypes.DEFAULT_TYPE):
     else:
         logger.info("Cleanup finished. No deleted users found.")
 
-
 async def run_periodic_cleanup(application: Application):
     while True:
         await asyncio.sleep(86400)
@@ -346,6 +90,194 @@ async def run_periodic_cleanup(application: Application):
         except Exception as e:
             logger.error(f"An error occurred in the periodic cleanup loop: {e}")
 
+RISK_EMOJIS = {"low": "🟢", "medium": "🟡", "high": "🟠", "very_high": "🔴"}
+
+async def fetch_risk_info(client: httpx.AsyncClient, ip: str) -> dict:
+    """Read the actual risk/score JSON from the scamalytics mirror instead of
+    just handing the user a link to click. Expected shape:
+    {"info": {"success": true, "fraud_score": 23, "risk": "medium"}, "details": {...}}
+    """
+    clean_ip = ip.split(':')[0].replace('[', '').replace(']', '')
+    try:
+        resp = await client.get(RISK_SCORE_URL_TEMPLATE.format(ip=clean_ip), timeout=10.0)
+        resp.raise_for_status()
+        data = resp.json()
+        info = data.get("info", {})
+        if info.get("success"):
+            return {"risk": info.get("risk", "unknown"), "score": info.get("fraud_score")}
+    except Exception as e:
+        logger.warning(f"Risk lookup failed for {clean_ip}: {e}")
+    return {}
+
+def format_risk_line(risk_data: dict, ip: str) -> str:
+    if risk_data and risk_data.get("risk"):
+        risk = str(risk_data["risk"])
+        score = risk_data.get("score")
+        emoji = RISK_EMOJIS.get(risk.lower(), "⚪️")
+        score_str = f" (Score: {score})" if score is not None else ""
+        return f"{emoji} Risk: {risk.title()}{score_str}"
+    clean_ip = ip.split(':')[0].replace('[', '').replace(']', '') if ip else ""
+    return f"Risk check: {RISK_SCORE_URL_TEMPLATE.format(ip=clean_ip)}"
+
+def _truncate(s: str, n: int) -> str:
+    s = s if s else "N/A"
+    return s if len(s) <= n else s[:max(0, n - 1)] + "…"
+
+TABLE_COLUMNS = (("#", 4), ("IP", 22), ("Ping", 7), ("Risk", 9), ("Country", 13))
+
+def build_results_table_html(results: list, domain_map: dict = None, range_map: dict = None, start_index: int = 0) -> str:
+    """Telegram doesn't render Markdown tables at all, so the closest real
+    equivalent is a fixed-width column layout inside a monospace <pre> block
+    (HTML parse mode). Returns the raw table text WITHOUT the <pre> wrapper
+    so callers can chunk multiple tables before wrapping."""
+    header_line = "".join(name.ljust(w) for name, w in TABLE_COLUMNS)
+    sep_line = "-" * sum(w for _, w in TABLE_COLUMNS)
+    lines = [header_line, sep_line]
+    for idx, res in enumerate(results):
+        prefix = get_result_source_prefix(res, domain_map, range_map).strip()
+        num = prefix if prefix else str(start_index + idx + 1)
+        ip_cell = _truncate(res.get('proxyIP', 'N/A'), TABLE_COLUMNS[1][1] - 1)
+        ping_value = res.get('ping')
+        ping_cell = f"{ping_value}ms" if ping_value is not None else "N/A"
+        risk_info = res.get('risk_info') or {}
+        risk_cell = _truncate(str(risk_info.get('risk', 'N/A')).title(), TABLE_COLUMNS[3][1] - 1)
+        country_cell = _truncate((res.get('info') or {}).get('country', 'N/A'), TABLE_COLUMNS[4][1] - 1)
+        row = (num, ip_cell, ping_cell, risk_cell, country_cell)
+        lines.append("".join(str(cell).ljust(w) for cell, w in zip(row, (w for _, w in TABLE_COLUMNS))).rstrip())
+    return "\n".join(lines)
+
+def build_results_table_markdown(results: list, domain_map: dict = None, range_map: dict = None) -> str:
+    """Native GFM pipe-table markdown. As of Telegram Bot API 10.1 ('Rich
+    Messages'), this renders as a REAL table in the client -- no more manual
+    monospace <pre> column-padding hacks."""
+    lines = ["| # | IP | Ping | Risk | Country |", "|---|---|---|---|---|"]
+    for idx, res in enumerate(results):
+        prefix = get_result_source_prefix(res, domain_map, range_map).strip() or str(idx + 1)
+        ip_cell = str(res.get('proxyIP', 'N/A')).replace('|', '\\|')
+        ping_value = res.get('ping')
+        ping_cell = f"{ping_value}ms" if ping_value is not None else "N/A"
+        risk_info = res.get('risk_info') or {}
+        risk_cell = str(risk_info.get('risk', 'N/A')).title()
+        country_cell = str((res.get('info') or {}).get('country', 'N/A')).replace('|', '\\|')
+        lines.append(f"| {prefix} | `{ip_cell}` | {ping_cell} | {risk_cell} | {country_cell} |")
+    return "\n".join(lines)
+
+def build_rich_table_markdown(results: list, title: str, domain_map: dict = None, range_map: dict = None, status_suffix: str = "") -> str:
+    """Wraps the native table in a native <details> block (Rich Markdown allows
+    embedding supported HTML tags directly), so it starts collapsed with
+    Telegram's own 'Show more' toggle -- the real equivalent of what the old
+    blockquote-expandable hack was approximating."""
+    clean_title = title.replace('**', '').strip()
+    table_md = build_results_table_markdown(results, domain_map, range_map)
+    suffix = f"\n\n{status_suffix}" if status_suffix else ""
+    return f"<details><summary>{clean_title} ({len(results)} successful)</summary>\n\n{table_md}{suffix}\n\n</details>"
+_rich_capability = {"supported": True}
+
+async def send_rich_or_fallback(bot, chat_id, markdown_text: str, fallback_messages: list[str], fallback_parse_mode=ParseMode.HTML, reply_markup=None) -> bool:
+    """Tries native sendRichMessage first; falls back to the legacy HTML
+    <pre>+expandable-blockquote messages (already fully chunked/escaped by the
+    caller) if rich sending isn't supported or fails for any reason. Returns
+    True if the rich path succeeded, False if it fell back."""
+    if _rich_capability["supported"]:
+        try:
+            api_kwargs = {"chat_id": chat_id, "rich_message": {"markdown": markdown_text}}
+            if reply_markup:
+                api_kwargs["reply_markup"] = reply_markup.to_dict()
+            await bot.do_api_request(endpoint="sendRichMessage", api_kwargs=api_kwargs)
+            return True
+        except BadRequest as e:
+            msg = str(e).lower()
+            if "method not found" in msg or "unknown method" in msg or "not supported" in msg:
+                logger.warning("sendRichMessage isn't supported by this bot/server; disabling rich messages for this run.")
+                _rich_capability["supported"] = False
+            else:
+                logger.warning(f"sendRichMessage failed ({e}); using fallback formatting for this message.")
+        except Exception as e:
+            logger.warning(f"sendRichMessage failed ({e}); using fallback formatting for this message.")
+
+    for msg_text in fallback_messages:
+        try:
+            await bot.send_message(chat_id=chat_id, text=msg_text, parse_mode=fallback_parse_mode, reply_markup=reply_markup, disable_web_page_preview=True)
+        except Exception as e:
+            logger.error(f"Fallback send also failed: {e}")
+    return False
+
+def wrap_expandable_blockquote(inner_text_html_escaped: str, header: str = "") -> str:
+    """Wraps content in Telegram's native collapsible ('expandable') blockquote
+    (HTML parse mode: <blockquote expandable>...</blockquote>), so long result
+    lists start collapsed behind a 'Show more' toggle instead of dumping a wall
+    of text straight into the chat."""
+    prefix = f"{html.escape(header)}\n" if header else ""
+    return f"{prefix}<blockquote expandable><pre>{inner_text_html_escaped}</pre></blockquote>"
+
+def build_table_messages(results: list, title: str, domain_map: dict = None, range_map: dict = None, status_suffix: str = "") -> list[str]:
+    """Splits results into one or more HTML messages, each an expandable
+    monospace table, respecting Telegram's ~4096 char message limit."""
+    TELEGRAM_LIMIT = 4000
+    ROWS_PER_CHUNK = 40
+    messages = []
+    for i in range(0, len(results), ROWS_PER_CHUNK):
+        chunk = results[i:i + ROWS_PER_CHUNK]
+        table_text = build_results_table_html(chunk, domain_map, range_map, start_index=i)
+        is_first = (i == 0)
+        header = html.escape(title.replace('**', '')) if is_first else html.escape(f"Continuation of {title.replace('**', '')}")
+        body = wrap_expandable_blockquote(html.escape(table_text), header=header)
+        if status_suffix and i + ROWS_PER_CHUNK >= len(results):
+            body += f"\n{html.escape(status_suffix)}"
+        if len(body) > TELEGRAM_LIMIT:
+            body = body[:TELEGRAM_LIMIT - 20] + "...</pre></blockquote>"
+        messages.append(body)
+    return messages if messages else [f"<b>{html.escape(title.replace('**', ''))}</b>\nNo successful proxies found."]
+
+FALLBACK_API_URL = "https://YourRenderAPI.onrender.com/api/v1/check?proxyip="
+
+async def _check_via_fallback_api(client: httpx.AsyncClient, proxy_address: str) -> dict | None:
+    """Only used when the Cloudflare Worker domain itself (WORKER_URL) is
+    unreachable. Talks directly to the backend checker API, bypassing the
+    Worker entirely for this one IP. Results are more bare-bones (no
+    Worker-side geo/AS enrichment) but the proxy check itself still happens
+    instead of silently failing while the Worker domain is down.
+    """
+    try:
+        resp = await client.get(FALLBACK_API_URL, params={'proxyip': proxy_address}, timeout=15.0)
+        resp.raise_for_status()
+        api_data = resp.json()
+        if api_data.get('proxyip') is True:
+            return {
+                'success': True,
+                'proxyIP': proxy_address,
+                'ping': api_data.get('ping'),
+                'info': {'country': 'N/A', 'countryCode': 'N/A', 'as': api_data.get('asOrganization', 'N/A')},
+                'method': 'Direct Fallback API',
+            }
+        return None
+    except Exception as e:
+        logger.error(f"Fallback API also failed for {proxy_address}: {e}")
+        return None
+
+async def validate_proxy_with_worker(ip_obj: dict or str) -> dict | None:
+    proxy_address = ip_obj['ip'] if isinstance(ip_obj, dict) else ip_obj
+    async with httpx.AsyncClient() as client:
+        data = None
+        try:
+            params = {'proxyip': proxy_address}
+            response = await client.get(f"{WORKER_URL}/api/check", params=params, timeout=20.0)
+            response.raise_for_status()
+            data = response.json()
+        except Exception as e:
+            logger.warning(f"Worker unreachable for {proxy_address} ({e}); trying direct fallback API.")
+            data = await _check_via_fallback_api(client, proxy_address)
+
+        try:
+            if data and data.get("success"):
+                if isinstance(ip_obj, dict):
+                    data.update(ip_obj)
+                data['risk_info'] = await fetch_risk_info(client, data.get('proxyIP', proxy_address))
+                return data
+            return None
+        except Exception as e:
+            logger.error(f"Worker API Error for {proxy_address}: {e}")
+            return None
 
 def parse_ip_range(range_str: str) -> list[str]:
     ips = []
@@ -363,10 +295,8 @@ def parse_ip_range(range_str: str) -> list[str]:
     except ValueError as e: logger.warning(f"Invalid range format: {range_str} - {e}")
     return ips
 
-
 def format_number_with_emojis(n: int) -> str:
     return "".join(NUMBER_EMOJIS[int(digit)] for digit in str(n))
-
 
 def get_result_source_prefix(res: dict, domain_map: dict = None, range_map: dict = None) -> str:
     prefix = ""
@@ -375,7 +305,6 @@ def get_result_source_prefix(res: dict, domain_map: dict = None, range_map: dict
     elif range_map and 'range_index' in res and res['range_index'] in range_map:
         prefix = f"{format_number_with_emojis(res['range_index'] + 1)} "
     return prefix
-
 
 async def _validate_and_resolve_domains(inputs: list) -> (list, str, list, dict):
     invalid_domains = []
@@ -393,40 +322,27 @@ async def _validate_and_resolve_domains(inputs: list) -> (list, str, list, dict)
             f"Do not include `http://`, `https://`, or `www.`.\n\n"
             f"{invalid_list}\n\n"
             f"Example of a correct format:\n"
-            f"`nima.nscl.ir`"
+            f"`di.nscl.ir`"
         )
         return None, error_message, None, None
 
     ips_to_check, domain_map = [], {}
-    for i, domain_item in enumerate(valid_domains):
-        try:
-            ips = await resolve_domain(domain_item)
-            if ips:
-                domain_map[i] = domain_item
-                for ip in ips:
-                    ips_to_check.append({"ip": ip, "domain_index": i})
-        except Exception as e:
-            logger.error(f"Error resolving domain {domain_item}: {e}")
-
+    async with httpx.AsyncClient() as client:
+        for i, domain_item in enumerate(valid_domains):
+            try:
+                params = {'domain': domain_item}
+                response = await client.get(f"{WORKER_URL}/api/resolve", params=params, timeout=45.0)
+                response.raise_for_status()
+                api_result = response.json()
+                if api_result.get("success"):
+                    domain_map[i] = domain_item
+                    for ip in api_result.get("ips", []):
+                        ips_to_check.append({"ip": ip, "domain_index": i})
+            except Exception as e:
+                logger.error(f"Error resolving domain {domain_item}: {e}")
+    
     unique_ips_to_check = list({item['ip']: item for item in ips_to_check}.values())
     return valid_domains, None, unique_ips_to_check, domain_map
-
-
-def get_check_controls_keyboard(check_id: str, status: str) -> InlineKeyboardMarkup:
-    """Pause/Resume + Cancel controls for an in-progress check, with colored
-    buttons: primary = pause, success = resume, danger = cancel."""
-    if status == 'paused':
-        row = [
-            InlineKeyboardButton("Resume", callback_data=f"resume_{check_id}", style="success"),
-            InlineKeyboardButton("Cancel", callback_data=f"cancel_{check_id}", style="danger"),
-        ]
-    else:
-        row = [
-            InlineKeyboardButton("Pause", callback_data=f"pause_{check_id}", style="primary"),
-            InlineKeyboardButton("Cancel", callback_data=f"cancel_{check_id}", style="danger"),
-        ]
-    return InlineKeyboardMarkup([row])
-
 
 async def check_ips_and_update_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, ips_to_check: list, title: str, domain_map: dict = None, range_map: dict = None, output_format: str = "4"):
     check_id = str(uuid.uuid4())
@@ -435,8 +351,12 @@ async def check_ips_and_update_message(context: ContextTypes.DEFAULT_TYPE, chat_
         'successful': [], 'domain_map': domain_map, 'range_map': range_map,
         'result_message_ids': [message_id], 'output_format': output_format
     }
-
-    reply_markup = get_check_controls_keyboard(check_id, 'running')
+    
+    keyboard = [[
+        InlineKeyboardButton("Pause", callback_data=f"pause_{check_id}", style="primary"),
+        InlineKeyboardButton("Cancel", callback_data=f"cancel_{check_id}", style="danger")
+    ]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
     context.user_data[check_id]['markup'] = reply_markup
 
     initial_text = f"Starting check for {len(ips_to_check)} IPs..."
@@ -453,9 +373,8 @@ async def check_ips_and_update_message(context: ContextTypes.DEFAULT_TYPE, chat_
         except Exception as e:
             logger.error(f"Failed to send new message: {e}")
             return
-
+    
     context.application.create_task(process_ips_in_batches(context, chat_id, check_id, title))
-
 
 async def process_ips_in_batches(context: ContextTypes.DEFAULT_TYPE, chat_id: int, check_id: str, title: str):
     try:
@@ -467,11 +386,11 @@ async def process_ips_in_batches(context: ContextTypes.DEFAULT_TYPE, chat_id: in
         output_format = check_data.get('output_format', "4")
         batch_size = 30
         last_sent_texts = {}
-
+        
         async def check_and_append(ip_obj):
             ip_to_track = ip_obj['ip'] if isinstance(ip_obj, dict) else ip_obj
             check_data['checked_ips'].add(ip_to_track)
-            result = await validate_proxy(ip_obj)
+            result = await validate_proxy_with_worker(ip_obj)
             if result:
                 check_data['successful'].append(result)
 
@@ -487,13 +406,13 @@ async def process_ips_in_batches(context: ContextTypes.DEFAULT_TYPE, chat_id: in
             if not batch:
                 logger.warning(f"Check {check_id} stalled. Breaking loop.")
                 break
-
+                
             await asyncio.gather(*(check_and_append(ip_obj) for ip_obj in batch))
-
+            
             if output_format in ["1", "4"]:
                 messages_to_send = []
                 current_parts = []
-
+                
                 for overall_idx, res in enumerate(check_data['successful']):
                     if not current_parts:
                         page_index = len(messages_to_send)
@@ -517,11 +436,9 @@ async def process_ips_in_batches(context: ContextTypes.DEFAULT_TYPE, chat_id: in
                     ping_value = res.get('ping')
                     ping_str = f" - Ping : {ping_value} ms" if ping_value is not None else ""
                     details = f"({geo_info.get('country', 'N/A')} - {as_name}{ping_str})"
-
-                    proxy_ip_for_url = res.get('proxyIP').split(':')[0].replace('[','').replace(']','')
-                    risk_link = RISK_SCORE_URL_TEMPLATE.format(ip=proxy_ip_for_url)
+                    
                     line1 = f"{number_emoji} {res.get('proxyIP')} {details}"
-                    line2 = f"risk and score: {risk_link}"
+                    line2 = format_risk_line(res.get('risk_info'), res.get('proxyIP'))
                     full_content_for_block = f"{line1}\n{line2}"
                     new_line = f"```{full_content_for_block}```"
 
@@ -554,7 +471,7 @@ async def process_ips_in_batches(context: ContextTypes.DEFAULT_TYPE, chat_id: in
             await asyncio.sleep(1.5)
 
         status = "Cancelled" if context.user_data.get(check_id, {}).get('status') == 'stopped' else "Completed"
-
+        
         if output_format in ["1", "4"]:
             for i, message_id in enumerate(check_data['result_message_ids']):
                 try:
@@ -568,11 +485,17 @@ async def process_ips_in_batches(context: ContextTypes.DEFAULT_TYPE, chat_id: in
                 except Exception as e:
                     logger.error(f"Error during finalization of message {message_id}: {e}")
 
+        if output_format == "5":
+            status_suffix = f"Check {status}. ({len(check_data['checked_ips'])}/{len(check_data['ips'])} checked, {len(check_data['successful'])} successful)"
+            rich_markdown = build_rich_table_markdown(check_data['successful'], title, domain_map, range_map, status_suffix=status_suffix)
+            fallback_messages = build_table_messages(check_data['successful'], title, domain_map, range_map, status_suffix=status_suffix)
+            await send_rich_or_fallback(context.bot, chat_id, rich_markdown, fallback_messages)
+
         if check_data['successful']:
             final_sorted_ips = sorted([res['proxyIP'] for res in check_data['successful']], key=lambda ip: ipaddress.ip_address(ip.split(':')[0].replace('[','').replace(']','')))
             copy_text = "\n".join(final_sorted_ips)
-
-            if output_format in ["2", "4"]:
+            
+            if output_format in ["2", "4", "5"]:
                 await context.bot.send_message(chat_id=chat_id, text=f"To copy all IPs, tap the code block below:\n```\n{copy_text}\n```", parse_mode=ParseMode.MARKDOWN_V2)
 
             if output_format in ["3", "4"]:
@@ -581,7 +504,7 @@ async def process_ips_in_batches(context: ContextTypes.DEFAULT_TYPE, chat_id: in
                 await context.bot.send_document(chat_id=chat_id, document=txt_file, filename=f"{file_name}.txt")
                 csv_file = io.BytesIO(copy_text.encode('utf-8'))
                 await context.bot.send_document(chat_id=chat_id, document=csv_file, filename=f"{file_name}.csv")
-
+              
         if output_format in ["2", "3"]:
             for m_id in check_data.get('result_message_ids', []):
                 try:
@@ -592,14 +515,13 @@ async def process_ips_in_batches(context: ContextTypes.DEFAULT_TYPE, chat_id: in
     finally:
         if check_id in context.user_data: del context.user_data[check_id]
 
-
 async def run_check_and_post(context: ContextTypes.DEFAULT_TYPE, target_chat_id, ips_to_check: list, title: str, confirmation_message, domain_map: dict = None, range_map: dict = None, output_format: str = "4"):
     try:
         successful_results_with_info = []
         batch_size = 30
         for i in range(0, len(ips_to_check), batch_size):
             batch = ips_to_check[i:i + batch_size]
-            results = await asyncio.gather(*(validate_proxy(ip_obj) for ip_obj in batch))
+            results = await asyncio.gather(*(validate_proxy_with_worker(ip_obj) for ip_obj in batch))
             successful_results_with_info.extend([res for res in results if res])
             await asyncio.sleep(1)
 
@@ -630,10 +552,8 @@ async def run_check_and_post(context: ContextTypes.DEFAULT_TYPE, target_chat_id,
                 ping_value = res.get('ping')
                 ping_str = f" - Ping : {ping_value} ms" if ping_value is not None else ""
                 details = f"({geo_info.get('country', 'N/A')} - {as_name}{ping_str})"
-                proxy_ip_for_url = res.get('proxyIP').split(':')[0].replace('[','').replace(']','')
-                risk_link = RISK_SCORE_URL_TEMPLATE.format(ip=proxy_ip_for_url)
                 line1 = f"{number_emoji} {res.get('proxyIP')} {details}"
-                line2 = f"risk and score: {risk_link}"
+                line2 = format_risk_line(res.get('risk_info'), res.get('proxyIP'))
                 full_content_for_block = f"{line1}\n{line2}"
                 new_line = f"```{full_content_for_block}```"
                 if len("\n".join(message_parts)) + len(new_line) + 2 > TELEGRAM_MESSAGE_LIMIT:
@@ -650,12 +570,18 @@ async def run_check_and_post(context: ContextTypes.DEFAULT_TYPE, target_chat_id,
                 await context.bot.send_message(chat_id=target_chat_id, text=final_message_text, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
                 await asyncio.sleep(0.5)
 
+        if output_format == "5":
+            status_suffix = f"Check Completed. ({len(successful_results_with_info)} successful)"
+            rich_markdown = build_rich_table_markdown(successful_results_with_info, title, domain_map, range_map, status_suffix=status_suffix)
+            fallback_messages = build_table_messages(successful_results_with_info, title, domain_map, range_map, status_suffix=status_suffix)
+            await send_rich_or_fallback(context.bot, target_chat_id, rich_markdown, fallback_messages)
+
         final_sorted_ips = sorted([res['proxyIP'] for res in successful_results_with_info], key=lambda ip: ipaddress.ip_address(ip.split(':')[0].replace('[','').replace(']','')))
         copy_text = "\n".join(final_sorted_ips)
-
-        if output_format in ["2", "4"]:
+        
+        if output_format in ["2", "4", "5"]:
             await context.bot.send_message(chat_id=target_chat_id, text=f"To copy all IPs, tap the code block below:\n```\n{copy_text}\n```", parse_mode=ParseMode.MARKDOWN_V2)
-
+        
         if output_format in ["3", "4"]:
             file_name = f"successful_proxies_{uuid.uuid4().hex[:6]}"
             txt_file = io.BytesIO(copy_text.encode('utf-8'))
@@ -670,10 +596,8 @@ async def run_check_and_post(context: ContextTypes.DEFAULT_TYPE, target_chat_id,
         try: await context.bot.delete_message(chat_id=confirmation_message.chat_id, message_id=confirmation_message.message_id)
         except Exception: pass
 
-
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("👋 Welcome! Use the menu commands to start.")
-
 
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
@@ -682,7 +606,6 @@ async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE
     elif update.message:
         await update.message.reply_text("Operation cancelled.")
     return ConversationHandler.END
-
 
 async def start_main_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     command_text = update.message.text.split()[0]
@@ -704,7 +627,6 @@ async def start_main_conversation(update: Update, context: ContextTypes.DEFAULT_
         context.user_data['command_in_progress'] = command
         return AWAIT_MAIN_INPUT
 
-
 async def handle_main_conversation_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     command = None
     if update.message.chat.type != ChatType.PRIVATE:
@@ -722,19 +644,15 @@ async def handle_main_conversation_input(update: Update, context: ContextTypes.D
     await process_command_logic(update, context, command, inputs, sent_message)
     return ConversationHandler.END
 
-
 def get_format_keyboard(user_id, data_key):
-    """Output-format picker. 'All Formats' is highlighted green (success)
-    as the recommended/most-complete option; the rest use the neutral
-    primary (blue) style."""
     keyboard = [
         [InlineKeyboardButton("Detailed Info", callback_data=f"fmt_1_{user_id}_{data_key}", style="primary")],
+        [InlineKeyboardButton("Rich Table (Collapsible)", callback_data=f"fmt_5_{user_id}_{data_key}", style="primary")],
         [InlineKeyboardButton("Copyable IPs", callback_data=f"fmt_2_{user_id}_{data_key}", style="primary")],
         [InlineKeyboardButton("Files (TXT/CSV)", callback_data=f"fmt_3_{user_id}_{data_key}", style="primary")],
         [InlineKeyboardButton("All Formats", callback_data=f"fmt_4_{user_id}_{data_key}", style="success")]
     ]
     return InlineKeyboardMarkup(keyboard)
-
 
 async def process_command_logic(update: Update, context: ContextTypes.DEFAULT_TYPE, command: str, inputs: list, message):
     user_id = update.effective_user.id
@@ -742,11 +660,10 @@ async def process_command_logic(update: Update, context: ContextTypes.DEFAULT_TY
     context.user_data[data_key] = {"command": command, "inputs": inputs, "message_id": message.message_id}
     await message.edit_text("Please select the output format you prefer:", reply_markup=get_format_keyboard(user_id, data_key))
 
-
 async def format_selection_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     _, out_fmt, creator_id, data_key = query.data.split('_')
-
+    
     if str(query.from_user.id) != creator_id:
         await query.answer("This menu is only for the user who initiated the command.", show_alert=True)
         return
@@ -759,15 +676,13 @@ async def format_selection_callback(update: Update, context: ContextTypes.DEFAUL
 
     command, inputs, msg_id = data['command'], data['inputs'], data['message_id']
     chat_id = query.message.chat_id
-
-    # Check if it's a POST command
+    
     if 'target_chat_id' in data:
         target_chat_id = data['target_chat_id']
         confirmation_msg = query.message
         context.application.create_task(run_post_command_logic(context, target_chat_id, command, inputs, confirmation_msg, output_format=out_fmt, title_prefix=data.get('title_prefix', "")))
         return
 
-    # Normal command logic
     ips_with_context = []
     if command == "proxyip":
         ips_with_context = [{"ip": ip} for ip in inputs]
@@ -817,7 +732,6 @@ async def format_selection_callback(update: Update, context: ContextTypes.DEFAUL
             else: await check_ips_and_update_message(context, chat_id, msg_id, ips_with_context, f"**{country_name} Check Results**", output_format=out_fmt)
         except Exception as e: await query.edit_message_text(f"Error: {e}")
 
-
 async def domain_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if '@' in update.message.text.split()[0] and update.message.chat.type != ChatType.PRIVATE:
         await update.message.reply_text(f"Please use `/domain` without mentioning the bot's name.", parse_mode=ParseMode.MARKDOWN)
@@ -826,11 +740,9 @@ async def domain_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     await update.message.reply_text("Please send the domain(s) you want to check.\nTo cancel at any time, send /cancel.")
     return AWAIT_DOMAIN_INPUT
 
-
 async def handle_domain_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     inputs = update.message.text.split()
     return await validate_and_process_domains(update, context, inputs)
-
 
 async def validate_and_process_domains(update: Update, context: ContextTypes.DEFAULT_TYPE, inputs: list) -> int:
     valid_domains, error_message, ips_to_check, domain_map = await _validate_and_resolve_domains(inputs)
@@ -844,7 +756,6 @@ async def validate_and_process_domains(update: Update, context: ContextTypes.DEF
     await sent_message.edit_text("Please select the output format you prefer:", reply_markup=get_format_keyboard(user_id, data_key))
     return ConversationHandler.END
 
-
 async def freeproxyip_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if '@' in update.message.text.split()[0] and update.message.chat.type != ChatType.PRIVATE:
         await update.message.reply_text(f"Please use `/freeproxyip` without mentioning the bot's name.", parse_mode=ParseMode.MARKDOWN)
@@ -857,21 +768,16 @@ async def freeproxyip_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         row.append(InlineKeyboardButton(name, callback_data=f"country_{code}"))
         if len(row) == 3: keyboard.append(row); row = []
     if row: keyboard.append(row)
-    keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="freeproxy_cancel", style="danger")])
+    keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="freeproxy_cancel")])
     await update.message.reply_text("Select from the list of countries below:", reply_markup=InlineKeyboardMarkup(keyboard))
-
 
 async def addchat_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message.chat.type != ChatType.PRIVATE:
         await update.message.reply_text("To use this command, please send it to me in a private chat.")
         return ConversationHandler.END
-    keyboard = [[
-        InlineKeyboardButton("Group", callback_data="addtype_group", style="primary"),
-        InlineKeyboardButton("Channel", callback_data="addtype_channel", style="primary"),
-    ]]
+    keyboard = [[InlineKeyboardButton("Group", callback_data="addtype_group"), InlineKeyboardButton("Channel", callback_data="addtype_channel")]]
     await update.message.reply_text("Which do you want to add?", reply_markup=InlineKeyboardMarkup(keyboard))
     return SELECT_ADD_TYPE
-
 
 async def addchat_select_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
@@ -882,7 +788,6 @@ async def addchat_select_type(update: Update, context: ContextTypes.DEFAULT_TYPE
     else: prompt = "Please send the group's numerical ID."
     await query.edit_message_text(prompt)
     return AWAIT_CHAT_ID
-
 
 async def addchat_receive_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     chat_id_str = update.message.text.strip()
@@ -912,7 +817,6 @@ async def addchat_receive_id(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await waiting_message.edit_text(f"Verification error: {e}")
         return ConversationHandler.END
 
-
 async def addchat_receive_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id_str = str(update.message.from_user.id)
     name, chat_id = update.message.text, context.user_data.pop('new_chat_id', None)
@@ -928,7 +832,6 @@ async def addchat_receive_name(update: Update, context: ContextTypes.DEFAULT_TYP
     context.user_data.clear()
     return ConversationHandler.END
 
-
 async def deletechat_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message.chat.type != ChatType.PRIVATE:
         await update.message.reply_text("Private chat only.")
@@ -942,7 +845,6 @@ async def deletechat_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await update.message.reply_text("Select destination to delete:", reply_markup=InlineKeyboardMarkup(keyboard))
     return SELECT_CHAT_TO_DELETE
 
-
 async def deletechat_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
@@ -950,13 +852,9 @@ async def deletechat_select(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await query.edit_message_text("Cancelled.")
         return ConversationHandler.END
     context.user_data['chat_to_delete'] = query.data.split('_')[-1]
-    keyboard = [[
-        InlineKeyboardButton("✅ Yes", callback_data="del_confirm_yes", style="danger"),
-        InlineKeyboardButton("❌ No", callback_data="del_confirm_no", style="primary"),
-    ]]
+    keyboard = [[InlineKeyboardButton("✅ Yes", callback_data="del_confirm_yes", style="danger"), InlineKeyboardButton("❌ No", callback_data="del_confirm_no", style="primary")]]
     await query.edit_message_text("Are you sure?", reply_markup=InlineKeyboardMarkup(keyboard))
     return CONFIRM_DELETION
-
 
 async def deletechat_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
@@ -970,7 +868,6 @@ async def deletechat_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.edit_message_text("✅ Deleted.")
     return ConversationHandler.END
 
-
 async def post_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message.chat.type != ChatType.PRIVATE:
         await update.message.reply_text("Private chat only.")
@@ -983,7 +880,6 @@ async def post_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Select destination:", reply_markup=InlineKeyboardMarkup(keyboard))
     return SELECT_TARGET_CHAT
 
-
 async def post_select_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
@@ -993,11 +889,10 @@ async def post_select_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         [InlineKeyboardButton("IP Range Check", callback_data="post_cmd_iprange")],
         [InlineKeyboardButton("Domain Check", callback_data="post_cmd_domain")],
         [InlineKeyboardButton("File URL Check", callback_data="post_cmd_file")],
-        [InlineKeyboardButton("✨ Free Proxies by Country", callback_data="post_cmd_freeproxyip", style="success")],
+        [InlineKeyboardButton("✨ Free Proxies by Country", callback_data="post_cmd_freeproxyip")],
     ]
     await query.edit_message_text("Select check type:", reply_markup=InlineKeyboardMarkup(keyboard))
     return SELECT_COMMAND
-
 
 async def post_select_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
@@ -1013,13 +908,12 @@ async def post_select_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             row.append(InlineKeyboardButton(name, callback_data=f"post_country_{code}"))
             if len(row) == 3: keyboard.append(row); row = []
         if row: keyboard.append(row)
-        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="post_cmd_back", style="danger")])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="post_cmd_back")])
         await query.edit_message_text("Select country:", reply_markup=InlineKeyboardMarkup(keyboard))
         return AWAIT_POST_COUNTRY
     else:
         await query.edit_message_text(f"Send input for `{command}`.")
         return AWAIT_COMMAND_INPUT
-
 
 async def post_handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     target_chat_id_str, command = context.user_data.get('target_chat_id'), context.user_data.get('post_command')
@@ -1030,7 +924,6 @@ async def post_handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     context.user_data[data_key] = {"command": command, "inputs": inputs, "target_chat_id": target_chat_id_str, "message_id": sent_msg.message_id}
     await sent_msg.edit_text("Select output format for destination:", reply_markup=get_format_keyboard(user_id, data_key))
     return ConversationHandler.END
-
 
 async def post_handle_domain_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     inputs = update.message.text.split()
@@ -1046,7 +939,6 @@ async def post_handle_domain_input(update: Update, context: ContextTypes.DEFAULT
     await sent_msg.edit_text("Select output format for destination:", reply_markup=get_format_keyboard(user_id, data_key))
     return ConversationHandler.END
 
-
 async def post_handle_country_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
@@ -1058,7 +950,6 @@ async def post_handle_country_selection(update: Update, context: ContextTypes.DE
     context.user_data[data_key] = {"command": "freeproxyip", "inputs": [country_code], "target_chat_id": target_chat_id_str, "title_prefix": f"**{country_name} Check Results**", "message_id": query.message.message_id}
     await query.edit_message_text(f"Select output format for {country_name}:", reply_markup=get_format_keyboard(user_id, data_key))
     return ConversationHandler.END
-
 
 async def run_post_command_logic(context: ContextTypes.DEFAULT_TYPE, target_chat_id_str: str, command: str, inputs: list, confirmation_message, output_format: str = "4", title_prefix: str = ""):
     ips_to_check, domain_map, range_map, title = [], {}, {}, title_prefix
@@ -1090,21 +981,20 @@ async def run_post_command_logic(context: ContextTypes.DEFAULT_TYPE, target_chat
                 ips_to_check = [{"ip": ip} for ip in ips_found]
             title = title_prefix or f"{COUNTRIES.get(country_code)} Check Results:"
         if not ips_to_check:
-            await context.bot.send_message(chat_id=target_chat_id, text="No IPs found.")
+            await context.bot.send_message(chat_id=target_chat_id, text="⚠️ *No IPs found.*", parse_mode=ParseMode.MARKDOWN)
             return
         await confirmation_message.edit_text("🚀 Check started in background. Results will be posted to destination.")
         await run_check_and_post(context, target_chat_id, ips_to_check, title, confirmation_message, domain_map, range_map, output_format=output_format)
     except Exception as e:
-        await context.bot.send_message(chat_id=confirmation_message.chat_id, text=f"Error: {e}")
-
+        await context.bot.send_message(chat_id=confirmation_message.chat_id, text=f"❌ *Error:* `{e}`", parse_mode=ParseMode.MARKDOWN)
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     parts = query.data.split('_', 1)
     callback_type, data = parts[0], (parts[1] if len(parts) > 1 else None)
-
+    
     if callback_type == "fmt": return await format_selection_callback(update, context)
-
+    
     if callback_type == "freeproxy" and data == "cancel":
         await query.answer(); await query.edit_message_text("Cancelled."); return
 
@@ -1127,20 +1017,19 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         current_status = context.user_data[check_id].get('status')
         if callback_type == 'pause':
             context.user_data[check_id]['status'] = 'paused'
-            keyboard = get_check_controls_keyboard(check_id, 'paused')
-            context.user_data[check_id]['markup'] = keyboard
-            await query.edit_message_reply_markup(reply_markup=keyboard)
+            keyboard = [[InlineKeyboardButton("Resume", callback_data=f"resume_{check_id}", style="success"), InlineKeyboardButton("Cancel", callback_data=f"cancel_{check_id}", style="danger")]]
+            context.user_data[check_id]['markup'] = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
         elif callback_type == 'resume':
             context.user_data[check_id]['status'] = 'running'
-            keyboard = get_check_controls_keyboard(check_id, 'running')
-            context.user_data[check_id]['markup'] = keyboard
-            await query.edit_message_reply_markup(reply_markup=keyboard)
+            keyboard = [[InlineKeyboardButton("Pause", callback_data=f"pause_{check_id}", style="primary"), InlineKeyboardButton("Cancel", callback_data=f"cancel_{check_id}", style="danger")]]
+            context.user_data[check_id]['markup'] = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
         elif callback_type == 'cancel':
             context.user_data[check_id]['status'] = 'stopped'
             await query.edit_message_reply_markup(reply_markup=None)
     finally:
         if check_id in context.user_data: context.user_data[check_id]['is_modifying_state'] = False
-
 
 async def post_init(application: Application):
     commands = [
@@ -1157,11 +1046,11 @@ async def post_init(application: Application):
     ]
     await application.bot.set_my_commands(commands)
     application.create_task(run_periodic_cleanup(application))
-
-
-def build_application() -> Application:
+    
+def main() -> None:
+    cprint("made with ❤️‍🔥 by @mehdiasmart", "light_cyan")
     application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
-
+    
     main_conv = ConversationHandler(
         entry_points=[CommandHandler(cmd, start_main_conversation) for cmd in ["proxyip", "iprange", "file"]],
         states={AWAIT_MAIN_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_main_conversation_input)]},
@@ -1208,30 +1097,7 @@ def build_application() -> Application:
     application.add_handler(main_conv); application.add_handler(domain_conv)
     application.add_handler(addchat_conv); application.add_handler(deletechat_conv); application.add_handler(post_conv)
     application.add_handler(CallbackQueryHandler(button_handler, pattern="^country_|^pause_|^resume_|^cancel_|^freeproxy_cancel|^fmt_"))
-    return application
-
-
-# ============================================================================
-# Combined entrypoint — runs the FastAPI server and the Telegram bot's
-# polling loop together in a single asyncio event loop / single process.
-# ============================================================================
-async def main() -> None:
-    application = build_application()
-
-    config = uvicorn.Config(app, host="0.0.0.0", port=PORT, log_level="info")
-    server = uvicorn.Server(config)
-
-    async with application:
-        await application.start()
-        await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
-        print(f"Starting combined server (API + Telegram bot) on http://0.0.0.0:{PORT}")
-        try:
-            await server.serve()
-        finally:
-            await application.updater.stop()
-            await application.stop()
-
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
-    cprint("made with ❤️‍🔥 by @mehdiasmart", "light_cyan")
-    asyncio.run(main())
+    main()
