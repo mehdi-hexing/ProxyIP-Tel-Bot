@@ -1,13 +1,11 @@
 import { connect } from 'cloudflare:sockets';
 
-// --- HELPER FUNCTIONS ---
-
 async function checkProxyIPTCP(proxyIP, port) {
+    let tcpSocket;
     try {
         const startTime = Date.now();
-        // IPv6 literals must be bracketed when handed to the sockets API
         const connectHost = (proxyIP.includes(':') && !proxyIP.startsWith('[')) ? `[${proxyIP}]` : proxyIP;
-        const tcpSocket = connect({ hostname: connectHost, port: port });
+        tcpSocket = connect({ hostname: connectHost, port: port });
         const ping = Date.now() - startTime;
 
         const writer = tcpSocket.writable.getWriter();
@@ -22,19 +20,23 @@ async function checkProxyIPTCP(proxyIP, port) {
         const reader = tcpSocket.readable.getReader();
         let responseData = new Uint8Array(0);
         const timeout = new Promise(resolve => setTimeout(() => resolve({ done: true }), 8000));
-        
-        while (true) {
-            const { value, done } = await Promise.race([reader.read(), timeout]);
-            if (done) break;
-            if (value) {
-                const newData = new Uint8Array(responseData.length + value.length);
-                newData.set(responseData);
-                newData.set(value, responseData.length);
-                responseData = newData;
+
+        try {
+            while (true) {
+                const { value, done } = await Promise.race([reader.read(), timeout]);
+                if (done) break;
+                if (value) {
+                    const newData = new Uint8Array(responseData.length + value.length);
+                    newData.set(responseData);
+                    newData.set(value, responseData.length);
+                    responseData = newData;
+                }
             }
+        } finally {
+            try { await reader.cancel(); } catch (_) {}
+            try { reader.releaseLock(); } catch (_) {}
         }
-        reader.releaseLock();
-        await tcpSocket.close();
+        try { await tcpSocket.close(); } catch (_) {}
 
         const responseText = new TextDecoder().decode(responseData);
         const looksLikeCloudflare = responseText.includes('cloudflare');
@@ -47,6 +49,7 @@ async function checkProxyIPTCP(proxyIP, port) {
             method: 'TCP Fallback'
         };
     } catch (error) {
+        try { if (tcpSocket) await tcpSocket.close(); } catch (_) {}
         return { success: false, error: error.message, method: 'TCP Fallback' };
     }
 }
@@ -73,18 +76,10 @@ async function checkProxyIP(proxyIPInput, env) {
     const cleanIp = hostToCheck.replace(/\[|\]/g, '');
 
     const apiUrls = [
-        `https://ServerIP:port/api/v1/check?proxyip=${encodeURIComponent(proxyIPInput)}`,
-        `https://YourRender.onrender.com/api/v1/check?proxyip=${encodeURIComponent(proxyIPInput)}`
+        `https://Your-Render-API.onrender.com/api/v1/check?proxyip=${encodeURIComponent(proxyIPInput)}`,
+        `https://YourServer:PORT/api/v1/check?proxyip=${encodeURIComponent(proxyIPInput)}`
     ];
 
-    // Run every external API and the worker's own direct TCP check IN PARALLEL and
-    // take whichever succeeds first, instead of trying them one after another.
-    // The old sequential approach could take 20-30+ seconds in the worst case
-    // (each API's own timeout, plus the TCP fallback only starting after every API
-    // had already failed) — long enough that a caller with a hard deadline (like a
-    // Telegram bot waiting on a webhook/callback response) would see the request
-    // expire before this ever replied. Racing bounds the worst case to roughly a
-    // single timeout window.
     const attempts = apiUrls.map(apiUrl => (async () => {
         try {
             const timeoutPromise = new Promise((_, reject) =>
@@ -138,10 +133,6 @@ async function checkProxyIP(proxyIPInput, env) {
             method: winner.method
         };
     } catch (error) {
-        // Every attempt failed. This is still a fast, clean, structured JSON
-        // response (never a hang, never a raw exception) — exactly what a
-        // polling/webhook client like a Telegram bot needs to move on instead
-        // of waiting until its own request expires.
         return {
             success: false,
             proxyIP: proxyIPInput,
@@ -151,10 +142,6 @@ async function checkProxyIP(proxyIPInput, env) {
     }
 }
 
-// Fetches and normalizes data from the Cloudflare-scamalytics.pages.dev mirror.
-// This single mirror is reused both as a geo-info fallback (when ip-api.com fails)
-// and as a risk-score fallback (when the official Scamalytics API is unavailable
-// or its request quota has been exhausted).
 async function getScamalyticsFallback(ip) {
     const cleanIp = ip.replace(/\[|\]/g, '');
     try {
@@ -171,6 +158,50 @@ async function getScamalyticsFallback(ip) {
     }
 }
 
+async function getRiskData(ip, env) {
+    const cleanIp = (ip || '').replace(/\[|\]/g, '');
+    if (!cleanIp) return { scamalytics: { status: 'fail' }, error: 'Missing IP parameter' };
+
+    if (env && env.SCAMALYTICS_USERNAME && env.SCAMALYTICS_API_KEY) {
+        try {
+            const scamalyticsUrl = `${env.SCAMALYTICS_API_BASE_URL || 'https://api.scamalytics.com'}/${env.SCAMALYTICS_USERNAME}/?key=${env.SCAMALYTICS_API_KEY}&ip=${encodeURIComponent(cleanIp)}`;
+            const response = await fetch(scamalyticsUrl);
+            if (response.ok) {
+                const data = await response.json();
+                if (data?.scamalytics?.status === 'ok') return data;
+                console.log('Scamalytics official API returned non-ok status, falling back:', data?.scamalytics?.status);
+            } else {
+                console.log(`Scamalytics official API HTTP ${response.status} (likely quota exceeded), falling back.`);
+            }
+        } catch (error) {
+            console.error('Scamalytics official API request failed, falling back:', error.message);
+        }
+    }
+
+    const fallback = await getScamalyticsFallback(cleanIp);
+    if (fallback && fallback.info) {
+        return {
+            scamalytics: {
+                status: 'ok',
+                scamalytics_score: fallback.info.fraud_score,
+                scamalytics_risk: (fallback.info.risk || 'unknown').toLowerCase()
+            },
+            external_datasources: {
+                dbip: {
+                    ip_country_name: fallback.details?.country,
+                    ip_country_code: fallback.details?.country_code,
+                    ip_city: fallback.details?.city,
+                    ip_asn: fallback.details?.asn,
+                    ip_isp_name: fallback.details?.isp || fallback.details?.organization
+                }
+            },
+            source: 'fallback-mirror'
+        };
+    }
+
+    return { scamalytics: { status: 'fail' }, error: 'All risk-scoring sources are currently unavailable.' };
+}
+
 async function getIpInfo(ip) {
     const defaultResponse = { status: 'fail', country: 'N/A', countryCode: 'N/A', as: 'N/A' };
     try {
@@ -185,8 +216,6 @@ async function getIpInfo(ip) {
         console.error("Geo API (ip-api.com) failed:", e.message);
     }
 
-    // ip-api.com failed (or explicitly returned "fail", which happens for some
-    // ranges/hostnames) -> fall back to the scamalytics mirror for basic geo data.
     const fallback = await getScamalyticsFallback(ip);
     if (fallback && fallback.details) {
         const d = fallback.details;
@@ -267,10 +296,6 @@ function parseIPRangeServer(rangeInput) {
 
 const forgivingIPv4Regex = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
 
-// The naive "long alternation" IPv6 regex commonly used for this is fragile:
-// JS regex alternation isn't longest-match, so it stops at the first alternative
-// that succeeds (e.g. matching only "2001:db8::" out of "2001:db8::1"). Instead,
-// grab plausible IPv6-shaped candidates broadly, then validate each one properly.
 function isValidIPv6Core(str) {
     if (str === '') return false;
     if (str.indexOf('::') !== -1) {
@@ -1375,7 +1400,6 @@ const CLIENT_SCRIPT = `
 function generateMainHTML(faviconURL) {
   const year = new Date().getFullYear();
   
-  // Country UI elements restored as per user request.
   const countries = {
     'ALL': 'All Countries', 'AE': 'United Arab Emirates', 'AL': 'Albania', 'AM': 'Armenia', 'AR': 'Argentina', 'AT': 'Austria', 'AU': 'Australia', 'AZ': 'Azerbaijan', 'BE': 'Belgium', 'BG': 'Bulgaria', 'BR': 'Brazil', 'CA': 'Canada', 'CH': 'Switzerland', 'CN': 'China', 'CO': 'Colombia', 'CY': 'Cyprus', 'CZ': 'Czech Republic', 'DE': 'Germany', 'DK': 'Denmark', 'EE': 'Estonia', 'ES': 'Spain', 'FI': 'Finland', 'FR': 'France', 'GB': 'United Kingdom', 'GI': 'Gibraltar', 'HK': 'Hong Kong', 'HU': 'Hungary', 'ID': 'Indonesia', 'IE': 'Ireland', 'IL': 'Israel', 'IN': 'India', 'IR': 'Iran', 'IT': 'Italy', 'JP': 'Japan', 'KR': 'South Korea', 'KZ': 'Kazakhstan', 'LT': 'Lithuania', 'LU': 'Luxembourg', 'LV': 'Latvia', 'MD': 'Moldova', 'MX': 'Mexico', 'MY': 'Malaysia', 'NL': 'Netherlands', 'NZ': 'New Zealand', 'PH': 'Philippines', 'PL': 'Poland', 'PR': 'Puerto Rico', 'PT': 'Portugal', 'QA': 'Qatar', 'RO': 'Romania', 'RS': 'Serbia', 'RU': 'Russia', 'SA': 'Saudi Arabia', 'SC': 'Seychelles', 'SE': 'Sweden', 'SG': 'Singapore', 'SK': 'Slovakia', 'TH': 'Thailand', 'TR': 'Turkey', 'TW': 'Taiwan', 'UA': 'Ukraine', 'US': 'United States', 'UZ': 'Uzbekistan', 'VN': 'Vietnam'
   };
@@ -1503,7 +1527,6 @@ function generateMainHTML(faviconURL) {
 </html>`;
 }
 
-// --- Main Fetch Handler ---
 export default {
     async fetch(request, env, ctx) {
         const url = new URL(request.url);
@@ -1511,7 +1534,6 @@ export default {
         const UA = request.headers.get('User-Agent') || 'null';
         const hostname = url.hostname;
         
-        // --- Web UI Routes ---
         if (path.toLowerCase().startsWith('/domain/')) {
             const domains_string = decodeURIComponent(path.substring('/domain/'.length));
             const domains = domains_string.split(',').map(s => s.trim()).filter(Boolean);
@@ -1581,7 +1603,6 @@ export default {
             return new Response(CLIENT_SCRIPT, { headers: { "Content-Type": "application/javascript;charset=UTF-8" } });
         }
 
-        // --- API Routes ---
         if (path.toLowerCase().startsWith('/api/')) {
             const timestampForToken = Math.ceil(new Date().getTime() / (1000 * 60 * 31));
             const temporaryTOKEN = await doubleHash(hostname + timestampForToken + UA);
@@ -1608,22 +1629,28 @@ export default {
                 if (!proxyIPInput) return new Response(JSON.stringify({success: false, error: 'Missing proxyip parameter'}), { status: 400, headers: { "Content-Type": "application/json" }});
                 try {
                     const result = await checkProxyIP(proxyIPInput, env);
+                    if (result.success) {
+                        result.risk = await getRiskData(result.proxyIP, env);
+                    }
                     return new Response(JSON.stringify(result), { status: 200, headers: { "Content-Type": "application/json" } });
                 } catch (error) {
-                    // Something unexpected blew up before checkProxyIP could return its own
-                    // clean success/fail object (e.g. a parsing bug). Never let this surface
-                    // as a raw Cloudflare error page — always fall back to a direct TCP check
-                    // from the worker itself so the client still gets a usable JSON result.
                     console.error('Unexpected error in /api/check, forcing a direct worker-side TCP check:', error.message);
                     try {
-                        const cleanIp = proxyIPInput.replace(/\[|\]/g, '').split(':')[0];
+                        let cleanIp = proxyIPInput;
+                        if (cleanIp.startsWith('[') && cleanIp.includes(']:')) {
+                            cleanIp = cleanIp.split(']:')[0];
+                        } else if (!cleanIp.startsWith('[') && (cleanIp.match(/:/g) || []).length === 1) {
+                            cleanIp = cleanIp.split(':')[0];
+                        }
+                        cleanIp = cleanIp.replace(/\[|\]/g, '');
                         const tcpResult = await checkProxyIPTCP(cleanIp, 443);
                         if (tcpResult.success) {
                             const ipInfo = await getIpInfo(cleanIp);
+                            const riskData = await getRiskData(cleanIp, env);
                             return new Response(JSON.stringify({
                                 success: true, proxyIP: proxyIPInput, portRemote: 443,
                                 ping: tcpResult.ping, timestamp: new Date().toISOString(),
-                                info: ipInfo, method: 'TCP Fallback (recovered)'
+                                info: ipInfo, risk: riskData, method: 'TCP Fallback (recovered)'
                             }), { status: 200, headers: { "Content-Type": "application/json" } });
                         }
                         return new Response(JSON.stringify({ success: false, proxyIP: proxyIPInput, error: `Worker-side check failed: ${tcpResult.error || 'Connection failed.'}` }), { status: 200, headers: { "Content-Type": "application/json" } });
@@ -1647,51 +1674,8 @@ export default {
             if (path.toLowerCase() === '/api/scamalytics-lookup') {
                 const ip = url.searchParams.get('ip');
                 if (!ip) return new Response(JSON.stringify({ error: 'Missing IP parameter' }), { status: 400, headers: { 'Content-Type': 'application/json' }});
-
-                // Try the official Scamalytics API first (if credentials are configured).
-                if (env.SCAMALYTICS_USERNAME && env.SCAMALYTICS_API_KEY) {
-                    try {
-                        const scamalyticsUrl = `${env.SCAMALYTICS_API_BASE_URL || 'https://api.scamalytics.com'}/${env.SCAMALYTICS_USERNAME}/?key=${env.SCAMALYTICS_API_KEY}&ip=${ip}`;
-                        const response = await fetch(scamalyticsUrl);
-                        if (response.ok) {
-                            const data = await response.json();
-                            // A valid, successful lookup -> return it as-is.
-                            if (data?.scamalytics?.status === 'ok') {
-                                return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });
-                            }
-                            console.log('Scamalytics official API returned non-ok status, falling back:', data?.scamalytics?.status);
-                        } else {
-                            console.log(`Scamalytics official API HTTP ${response.status} (likely quota exceeded), falling back.`);
-                        }
-                    } catch (error) {
-                        console.error('Scamalytics official API request failed, falling back:', error.message);
-                    }
-                }
-
-                // Official API missing, rate-limited, or failed -> use the fallback mirror.
-                const fallback = await getScamalyticsFallback(ip);
-                if (fallback && fallback.info) {
-                    const normalized = {
-                        scamalytics: {
-                            status: 'ok',
-                            scamalytics_score: fallback.info.fraud_score,
-                            scamalytics_risk: (fallback.info.risk || 'unknown').toLowerCase()
-                        },
-                        external_datasources: {
-                            dbip: {
-                                ip_country_name: fallback.details?.country,
-                                ip_country_code: fallback.details?.country_code,
-                                ip_city: fallback.details?.city,
-                                ip_asn: fallback.details?.asn,
-                                ip_isp_name: fallback.details?.isp || fallback.details?.organization
-                            }
-                        },
-                        source: 'fallback-mirror'
-                    };
-                    return new Response(JSON.stringify(normalized), { headers: { "Content-Type": "application/json" } });
-                }
-
-                return new Response(JSON.stringify({ scamalytics: { status: 'fail' }, error: 'All risk-scoring sources are currently unavailable.' }), { status: 200, headers: { 'Content-Type': 'application/json' }});
+                const result = await getRiskData(ip, env);
+                return new Response(JSON.stringify(result), { status: 200, headers: { 'Content-Type': 'application/json' }});
             }
             
             if (path.toLowerCase() === '/api/ip-info') {
