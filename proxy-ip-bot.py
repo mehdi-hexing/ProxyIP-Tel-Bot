@@ -23,7 +23,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-WORKER_URL = "https://check80.pages.dev"
+WORKER_URL = "https://Your-Checker.pages.dev" #The source of worker available in repository
 
 DB_FILE = "bot_data.json"
 MESSAGE_ENTITY_LIMIT = 45
@@ -93,12 +93,25 @@ async def run_periodic_cleanup(application: Application):
 
 RISK_EMOJIS = {"low": "🟢", "medium": "🟡", "high": "🟠", "very_high": "🔴"}
 
+def strip_port(ip: str) -> str:
+    """Bracket-aware host extraction. A naive `ip.split(':')[0]` truncates a
+    bare IPv6 address (e.g. '2001:db8::1') down to just '2001', since IPv6
+    addresses legitimately contain multiple colons themselves."""
+    s = (ip or "").strip()
+    if s.startswith('[') and ']:' in s:
+        return s.split(']:')[0].lstrip('[')
+    if s.startswith('[') and s.endswith(']'):
+        return s[1:-1]
+    if s.count(':') == 1:
+        return s.split(':')[0]
+    return s.strip('[]')
+
 async def fetch_risk_info(client: httpx.AsyncClient, ip: str) -> dict:
     """Read the actual risk/score JSON from the scamalytics mirror instead of
     just handing the user a link to click. Expected shape:
     {"info": {"success": true, "fraud_score": 23, "risk": "medium"}, "details": {...}}
     """
-    clean_ip = ip.split(':')[0].replace('[', '').replace(']', '')
+    clean_ip = strip_port(ip)
     try:
         resp = await client.get(RISK_SCORE_URL_TEMPLATE.format(ip=clean_ip), timeout=10.0)
         resp.raise_for_status()
@@ -117,7 +130,7 @@ def format_risk_line(risk_data: dict, ip: str) -> str:
         emoji = RISK_EMOJIS.get(risk.lower(), "⚪️")
         score_str = f" (Score: {score})" if score is not None else ""
         return f"{emoji} Risk: {risk.title()}{score_str}"
-    clean_ip = ip.split(':')[0].replace('[', '').replace(']', '') if ip else ""
+    clean_ip = strip_port(ip) if ip else ""
     return f"Risk check: {RISK_SCORE_URL_TEMPLATE.format(ip=clean_ip)}"
 
 def _truncate(s: str, n: int) -> str:
@@ -147,6 +160,32 @@ def build_results_table_html(results: list, domain_map: dict = None, range_map: 
         lines.append("".join(str(cell).ljust(w) for cell, w in zip(row, (w for _, w in TABLE_COLUMNS))).rstrip())
     return "\n".join(lines)
 
+FAILED_TABLE_COLUMNS = (("#", 4), ("IP", 30))
+
+def build_failed_table_html(failed: list, domain_map: dict = None, range_map: dict = None, start_index: int = 0) -> str:
+    """Same fixed-width monospace layout as the successful-IPs table. Only
+    lists the failed IPs themselves -- no reason column, since the failure
+    reason isn't actionable for the user and the field previously risked
+    echoing raw backend/API text."""
+    header_line = "".join(name.ljust(w) for name, w in FAILED_TABLE_COLUMNS)
+    sep_line = "-" * sum(w for _, w in FAILED_TABLE_COLUMNS)
+    lines = [header_line, sep_line]
+    for idx, res in enumerate(failed):
+        prefix = get_result_source_prefix(res, domain_map, range_map).strip()
+        num = prefix if prefix else str(start_index + idx + 1)
+        ip_cell = _truncate(res.get('proxyIP', 'N/A'), FAILED_TABLE_COLUMNS[1][1] - 1)
+        row = (num, ip_cell)
+        lines.append("".join(str(cell).ljust(w) for cell, w in zip(row, (w for _, w in FAILED_TABLE_COLUMNS))).rstrip())
+    return "\n".join(lines)
+
+def build_failed_table_markdown(failed: list, domain_map: dict = None, range_map: dict = None) -> str:
+    lines = ["| # | IP |", "|---|---|"]
+    for idx, res in enumerate(failed):
+        prefix = get_result_source_prefix(res, domain_map, range_map).strip() or str(idx + 1)
+        ip_cell = str(res.get('proxyIP', 'N/A')).replace('|', '\\|')
+        lines.append(f"| {prefix} | `{ip_cell}` |")
+    return "\n".join(lines)
+
 def build_results_table_markdown(results: list, domain_map: dict = None, range_map: dict = None) -> str:
     """Native GFM pipe-table markdown. As of Telegram Bot API 10.1 ('Rich
     Messages'), this renders as a REAL table in the client -- no more manual
@@ -163,15 +202,32 @@ def build_results_table_markdown(results: list, domain_map: dict = None, range_m
         lines.append(f"| {prefix} | `{ip_cell}` | {ping_cell} | {risk_cell} | {country_cell} |")
     return "\n".join(lines)
 
-def build_rich_table_markdown(results: list, title: str, domain_map: dict = None, range_map: dict = None, status_suffix: str = "") -> str:
+def build_rich_table_markdown(results: list, title: str, domain_map: dict = None, range_map: dict = None, status_suffix: str = "", failed: list = None) -> str:
     """Wraps the native table in a native <details> block (Rich Markdown allows
     embedding supported HTML tags directly), so it starts collapsed with
     Telegram's own 'Show more' toggle -- the real equivalent of what the old
-    blockquote-expandable hack was approximating."""
-    clean_title = title.replace('**', '').strip()
+    blockquote-expandable hack was approximating. Failed IPs (if any) get
+    their own separate collapsed <details> block right underneath, so they're
+    visible but don't clutter the successful-results view by default.
+
+    The <summary> line itself is kept as short, plain text -- content inside
+    an inline HTML tag like <summary> isn't run back through the Markdown
+    parser, so any `backtick`/**bold** markers placed there would show up as
+    literal characters instead of being rendered. Anything with Markdown
+    styling (the per-domain/range list with its `code` ticks) is placed as
+    its own line *outside* the <summary>, right above the table, where
+    normal Markdown parsing still applies."""
+    title_line, *rest = title.split('\n', 1)
+    clean_summary = title_line.replace('**', '').strip()
+    styled_subtitle = rest[0].strip() if rest else ""
     table_md = build_results_table_markdown(results, domain_map, range_map)
+    subtitle_block = f"{styled_subtitle}\n\n" if styled_subtitle else ""
     suffix = f"\n\n{status_suffix}" if status_suffix else ""
-    return f"<details><summary>{clean_title} ({len(results)} successful)</summary>\n\n{table_md}{suffix}\n\n</details>"
+    parts = [f"<details><summary>{clean_summary} ({len(results)} successful)</summary>\n\n{subtitle_block}{table_md}{suffix}\n\n</details>"]
+    if failed:
+        failed_md = build_failed_table_markdown(failed, domain_map, range_map)
+        parts.append(f"<details><summary>❌ Failed IPs ({len(failed)})</summary>\n\n{failed_md}\n\n</details>")
+    return "\n\n".join(parts)
 _rich_capability = {"supported": True}
 
 async def send_rich_or_fallback(bot, chat_id, markdown_text: str, fallback_messages: list[str], fallback_parse_mode=ParseMode.HTML, reply_markup=None) -> bool:
@@ -203,82 +259,190 @@ async def send_rich_or_fallback(bot, chat_id, markdown_text: str, fallback_messa
             logger.error(f"Fallback send also failed: {e}")
     return False
 
-def wrap_expandable_blockquote(inner_text_html_escaped: str, header: str = "") -> str:
+def _strip_md_markers(text: str) -> str:
+    """Titles are built once and reused across several send paths (legacy
+    Markdown, Rich Markdown, plain HTML). They're written with light Markdown
+    styling (**bold**, `code`) for the Markdown paths, but the plain-HTML
+    fallback below doesn't parse Markdown at all -- so without stripping
+    these markers first, the user would see literal ** and ` characters."""
+    return re.sub(r'[`*]', '', text or '')
+
+def wrap_expandable_blockquote(inner_text_html_escaped: str, header_html_escaped: str = "") -> str:
     """Wraps content in Telegram's native collapsible ('expandable') blockquote
     (HTML parse mode: <blockquote expandable>...</blockquote>), so long result
     lists start collapsed behind a 'Show more' toggle instead of dumping a wall
-    of text straight into the chat."""
-    prefix = f"{html.escape(header)}\n" if header else ""
+    of text straight into the chat. Both arguments must already be
+    HTML-escaped by the caller -- this function does not escape them itself,
+    to avoid double-escaping."""
+    prefix = f"{header_html_escaped}\n" if header_html_escaped else ""
     return f"{prefix}<blockquote expandable><pre>{inner_text_html_escaped}</pre></blockquote>"
 
-def build_table_messages(results: list, title: str, domain_map: dict = None, range_map: dict = None, status_suffix: str = "") -> list[str]:
+def build_table_messages(results: list, title: str, domain_map: dict = None, range_map: dict = None, status_suffix: str = "", failed: list = None) -> list[str]:
     """Splits results into one or more HTML messages, each an expandable
-    monospace table, respecting Telegram's ~4096 char message limit."""
+    monospace table, respecting Telegram's ~4096 char message limit. Failed
+    IPs (if any) get their own separate expandable block(s) appended after
+    the successful ones."""
     TELEGRAM_LIMIT = 4000
     ROWS_PER_CHUNK = 40
+    plain_title = _strip_md_markers(title)
     messages = []
     for i in range(0, len(results), ROWS_PER_CHUNK):
         chunk = results[i:i + ROWS_PER_CHUNK]
         table_text = build_results_table_html(chunk, domain_map, range_map, start_index=i)
         is_first = (i == 0)
-        header = html.escape(title.replace('**', '')) if is_first else html.escape(f"Continuation of {title.replace('**', '')}")
-        body = wrap_expandable_blockquote(html.escape(table_text), header=header)
+        header = html.escape(plain_title) if is_first else html.escape(f"Continuation of {plain_title}")
+        body = wrap_expandable_blockquote(html.escape(table_text), header_html_escaped=header)
         if status_suffix and i + ROWS_PER_CHUNK >= len(results):
             body += f"\n{html.escape(status_suffix)}"
         if len(body) > TELEGRAM_LIMIT:
             body = body[:TELEGRAM_LIMIT - 20] + "...</pre></blockquote>"
         messages.append(body)
-    return messages if messages else [f"<b>{html.escape(title.replace('**', ''))}</b>\nNo successful proxies found."]
+    if not messages:
+        messages = [f"<b>{html.escape(plain_title)}</b>\nNo successful proxies found."]
 
-FALLBACK_API_URL = "https://YourRenderAPI.onrender.com/api/v1/check?proxyip="
+    if failed:
+        for i in range(0, len(failed), ROWS_PER_CHUNK):
+            chunk = failed[i:i + ROWS_PER_CHUNK]
+            table_text = build_failed_table_html(chunk, domain_map, range_map, start_index=i)
+            header = html.escape(f"❌ Failed IPs ({len(failed)})") if i == 0 else html.escape("❌ Failed IPs (continued)")
+            body = wrap_expandable_blockquote(html.escape(table_text), header_html_escaped=header)
+            if len(body) > TELEGRAM_LIMIT:
+                body = body[:TELEGRAM_LIMIT - 20] + "...</pre></blockquote>"
+            messages.append(body)
 
-async def _check_via_fallback_api(client: httpx.AsyncClient, proxy_address: str) -> dict | None:
+    return messages
+
+async def send_failed_ips_plain_messages(bot, chat_id, failed: list, domain_map: dict = None, range_map: dict = None):
+    """Formats 1/4 use legacy Markdown, which has no collapsible-section
+    equivalent to Rich Markdown's <details> — failed IPs are sent as their
+    own clearly-labelled plain message(s) instead, separate from (and after)
+    the successful-results messages. Only lists the IPs themselves; the
+    failure reason isn't shown since it's not actionable for the user."""
+    if not failed:
+        return
+    TELEGRAM_LIMIT = 4000
+    lines = [f"**❌ Failed IPs ({len(failed)})**", "---"]
+    messages = []
+    for idx, res in enumerate(failed):
+        prefix = get_result_source_prefix(res, domain_map, range_map).strip() or str(idx + 1)
+        ip = res.get('proxyIP', 'N/A')
+        line = f"{prefix} `{ip}`"
+        if len("\n".join(lines)) + len(line) + 2 > TELEGRAM_LIMIT:
+            messages.append("\n".join(lines))
+            lines = ["**❌ Failed IPs (continued)**", "---", line]
+        else:
+            lines.append(line)
+    if lines:
+        messages.append("\n".join(lines))
+    for msg in messages:
+        try:
+            await bot.send_message(chat_id=chat_id, text=msg, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
+        except Exception as e:
+            logger.error(f"Failed to send failed-IPs message: {e}")
+
+FALLBACK_API_URLS = [
+    "https://Your-Server:PORT/api/v1/check?proxyip=",
+    "https://Your-Second-API.onrender.com/api/v1/check?proxyip=",
+]
+# YOU CAN FIND SOURCE IN MY "ProxyIP-Checker-API" REPOSITORY
+
+async def _check_via_fallback_api(client: httpx.AsyncClient, url: str, proxy_address: str) -> dict | None:
     """Only used when the Cloudflare Worker domain itself (WORKER_URL) is
-    unreachable. Talks directly to the backend checker API, bypassing the
+    unreachable. Talks directly to a backend checker API, bypassing the
     Worker entirely for this one IP. Results are more bare-bones (no
     Worker-side geo/AS enrichment) but the proxy check itself still happens
     instead of silently failing while the Worker domain is down.
     """
     try:
-        resp = await client.get(FALLBACK_API_URL, params={'proxyip': proxy_address}, timeout=15.0)
+        resp = await client.get(url, params={'proxyip': proxy_address}, timeout=10.0)
         resp.raise_for_status()
         api_data = resp.json()
         if api_data.get('proxyip') is True:
+            host = url.split('/')[2] if '//' in url else url
             return {
                 'success': True,
                 'proxyIP': proxy_address,
                 'ping': api_data.get('ping'),
                 'info': {'country': 'N/A', 'countryCode': 'N/A', 'as': api_data.get('asOrganization', 'N/A')},
-                'method': 'Direct Fallback API',
+                'method': f'Direct Fallback API ({host})',
             }
         return None
     except Exception as e:
-        logger.error(f"Fallback API also failed for {proxy_address}: {e}")
+        logger.warning(f"Fallback API {url} failed for {proxy_address}: {e}")
         return None
 
-async def validate_proxy_with_worker(ip_obj: dict or str) -> dict | None:
+async def _check_via_fallback_apis_raced(client: httpx.AsyncClient, proxy_address: str) -> dict | None:
+    """Races every configured fallback backend concurrently and returns
+    whichever succeeds first, instead of trying one URL after another. A
+    single sleeping/slow free-tier instance (Render cold starts can take
+    30-50s) would otherwise sink the whole check even when a second backend
+    is perfectly healthy and would have answered in under a second."""
+    tasks = [asyncio.create_task(_check_via_fallback_api(client, url, proxy_address)) for url in FALLBACK_API_URLS]
+    try:
+        for coro in asyncio.as_completed(tasks):
+            result = await coro
+            if result:
+                return result
+    finally:
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+    return None
+
+def _risk_info_from_worker_payload(data: dict) -> dict:
+    """The Worker's own /api/check now embeds a risk score directly in its
+    response for successful checks. Reuse it when present instead of making
+    a second, redundant network call for the exact same data."""
+    scam = ((data or {}).get('risk') or {}).get('scamalytics') or {}
+    if scam.get('status') == 'ok':
+        return {"risk": scam.get('scamalytics_risk', 'unknown'), "score": scam.get('scamalytics_score')}
+    return {}
+
+async def validate_proxy_with_worker(ip_obj: dict or str) -> dict:
     proxy_address = ip_obj['ip'] if isinstance(ip_obj, dict) else ip_obj
     async with httpx.AsyncClient() as client:
         data = None
+        worker_reachable = True
+        worker_error = None
         try:
-            params = {'proxyip': proxy_address}
-            response = await client.get(f"{WORKER_URL}/api/check", params=params, timeout=20.0)
+            params = {'proxyip': proxy_address} 
+            response = await client.get(f"{WORKER_URL}/api/check", params=params, timeout=12.0)
             response.raise_for_status()
             data = response.json()
         except Exception as e:
-            logger.warning(f"Worker unreachable for {proxy_address} ({e}); trying direct fallback API.")
-            data = await _check_via_fallback_api(client, proxy_address)
+            worker_reachable = False
+            worker_error = str(e)
+            logger.warning(f"Worker unreachable for {proxy_address} ({e}); racing direct fallback APIs.")
+
+        if not worker_reachable:
+            data = await _check_via_fallback_apis_raced(client, proxy_address)
+
+        def _fail(reason: str) -> dict:
+            logger.info(f"Proxy check failed for {proxy_address}: {reason}")
+            failure = {"success": False, "proxyIP": proxy_address}
+            if isinstance(ip_obj, dict):
+                failure.update({k: v for k, v in ip_obj.items() if k != 'ip'})
+            return failure
 
         try:
             if data and data.get("success"):
                 if isinstance(ip_obj, dict):
                     data.update(ip_obj)
-                data['risk_info'] = await fetch_risk_info(client, data.get('proxyIP', proxy_address))
+                risk_info = _risk_info_from_worker_payload(data) if worker_reachable else {}
+                if not risk_info:
+                    risk_info = await fetch_risk_info(client, data.get('proxyIP', proxy_address))
+                data['risk_info'] = risk_info
+                data['success'] = True
                 return data
-            return None
+
+            if data and data.get("error"):
+                return _fail(data["error"])
+            if not worker_reachable:
+                return _fail(f"Worker unreachable ({worker_error}) and all fallback APIs failed.")
+            return _fail("Not a valid proxy.")
         except Exception as e:
             logger.error(f"Worker API Error for {proxy_address}: {e}")
-            return None
+            return _fail(str(e))
 
 def parse_ip_range(range_str: str) -> list[str]:
     ips = []
@@ -307,6 +471,47 @@ def get_result_source_prefix(res: dict, domain_map: dict = None, range_map: dict
         prefix = f"{format_number_with_emojis(res['range_index'] + 1)} "
     return prefix
 
+async def _resolve_domain_fallback(client: httpx.AsyncClient, domain: str) -> list[str]:
+    """Only used when the Worker's own /api/resolve is unreachable. Queries
+    Cloudflare's DNS-over-HTTPS directly for both A and AAAA records — the
+    exact same technique the Worker itself uses internally — so a domain
+    check still works while the Worker domain is down."""
+    ips = []
+    headers = {'Accept': 'application/dns-json'}
+    try:
+        a_resp, aaaa_resp = await asyncio.gather(
+            client.get("https://1.1.1.1/dns-query", params={"name": domain, "type": "A"}, headers=headers, timeout=8.0),
+            client.get("https://1.1.1.1/dns-query", params={"name": domain, "type": "AAAA"}, headers=headers, timeout=8.0),
+            return_exceptions=True
+        )
+        if isinstance(a_resp, httpx.Response) and a_resp.status_code == 200:
+            for ans in a_resp.json().get("Answer", []):
+                if ans.get("type") == 1:
+                    ips.append(ans["data"])
+        if isinstance(aaaa_resp, httpx.Response) and aaaa_resp.status_code == 200:
+            for ans in aaaa_resp.json().get("Answer", []):
+                if ans.get("type") == 28:
+                    ips.append(f"[{ans['data']}]")
+    except Exception as e:
+        logger.warning(f"DNS fallback failed for {domain}: {e}")
+    return ips
+
+async def _resolve_one_domain(client: httpx.AsyncClient, index: int, domain_item: str):
+    try:
+        params = {'domain': domain_item}
+        response = await client.get(f"{WORKER_URL}/api/resolve", params=params, timeout=10.0)
+        response.raise_for_status()
+        api_result = response.json()
+        if api_result.get("success") and api_result.get("ips"):
+            return index, domain_item, api_result["ips"]
+        raise ValueError(api_result.get("error", "Worker returned no IPs"))
+    except Exception as e:
+        logger.warning(f"Worker DNS resolve failed for {domain_item} ({e}); using direct DNS fallback.")
+        ips = await _resolve_domain_fallback(client, domain_item)
+        if not ips:
+            logger.error(f"Both Worker and fallback DNS resolution failed for {domain_item}.")
+        return index, domain_item, ips
+
 async def _validate_and_resolve_domains(inputs: list) -> (list, str, list, dict):
     invalid_domains = []
     valid_domains = []
@@ -329,19 +534,16 @@ async def _validate_and_resolve_domains(inputs: list) -> (list, str, list, dict)
 
     ips_to_check, domain_map = [], {}
     async with httpx.AsyncClient() as client:
-        for i, domain_item in enumerate(valid_domains):
-            try:
-                params = {'domain': domain_item}
-                response = await client.get(f"{WORKER_URL}/api/resolve", params=params, timeout=45.0)
-                response.raise_for_status()
-                api_result = response.json()
-                if api_result.get("success"):
-                    domain_map[i] = domain_item
-                    for ip in api_result.get("ips", []):
-                        ips_to_check.append({"ip": ip, "domain_index": i})
-            except Exception as e:
-                logger.error(f"Error resolving domain {domain_item}: {e}")
-    
+        resolved = await asyncio.gather(*(
+            _resolve_one_domain(client, i, domain_item) for i, domain_item in enumerate(valid_domains)
+        ))
+
+    for index, domain_item, ips in resolved:
+        if ips:
+            domain_map[index] = domain_item
+            for ip in ips:
+                ips_to_check.append({"ip": ip, "domain_index": index})
+
     unique_ips_to_check = list({item['ip']: item for item in ips_to_check}.values())
     return valid_domains, None, unique_ips_to_check, domain_map
 
@@ -349,7 +551,7 @@ async def check_ips_and_update_message(context: ContextTypes.DEFAULT_TYPE, chat_
     check_id = str(uuid.uuid4())
     context.user_data[check_id] = {
         'status': 'running', 'ips': ips_to_check, 'checked_ips': set(),
-        'successful': [], 'domain_map': domain_map, 'range_map': range_map,
+        'successful': [], 'failed': [], 'domain_map': domain_map, 'range_map': range_map,
         'result_message_ids': [message_id], 'output_format': output_format
     }
     
@@ -392,8 +594,10 @@ async def process_ips_in_batches(context: ContextTypes.DEFAULT_TYPE, chat_id: in
             ip_to_track = ip_obj['ip'] if isinstance(ip_obj, dict) else ip_obj
             check_data['checked_ips'].add(ip_to_track)
             result = await validate_proxy_with_worker(ip_obj)
-            if result:
+            if result.get('success'):
                 check_data['successful'].append(result)
+            else:
+                check_data['failed'].append(result)
 
         while len(check_data['checked_ips']) < len(check_data['ips']):
             current_state = context.user_data.get(check_id, {}).get('status', 'stopped')
@@ -419,7 +623,7 @@ async def process_ips_in_batches(context: ContextTypes.DEFAULT_TYPE, chat_id: in
                         page_index = len(messages_to_send)
                         is_first_page = (page_index == 0)
                         current_title = title if is_first_page else f"**Continuation {title.strip('**')}**"
-                        header = f"Checked: {len(check_data['checked_ips'])}/{len(check_data['ips'])} | Successful: {len(check_data['successful'])}"
+                        header = f"Checked: {len(check_data['checked_ips'])}/{len(check_data['ips'])} | Successful: {len(check_data['successful'])} | Failed: {len(check_data['failed'])}"
                         current_parts.extend([f"**{current_title}**", header, "---"])
 
                     number_emoji = ""
@@ -445,7 +649,7 @@ async def process_ips_in_batches(context: ContextTypes.DEFAULT_TYPE, chat_id: in
 
                     if len("\n".join(current_parts)) + len(new_line) + 2 > 4000:
                         messages_to_send.append("\n".join(current_parts))
-                        header = f"Checked: {len(check_data['checked_ips'])}/{len(check_data['ips'])} | Successful: {len(check_data['successful'])}"
+                        header = f"Checked: {len(check_data['checked_ips'])}/{len(check_data['ips'])} | Successful: {len(check_data['successful'])} | Failed: {len(check_data['failed'])}"
                         current_parts = [f"**Continuation {title.strip('**')}**", header, "---", new_line]
                     else:
                         current_parts.append(new_line)
@@ -485,15 +689,18 @@ async def process_ips_in_batches(context: ContextTypes.DEFAULT_TYPE, chat_id: in
                     await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=final_text, parse_mode=ParseMode.MARKDOWN, reply_markup=None, disable_web_page_preview=True)
                 except Exception as e:
                     logger.error(f"Error during finalization of message {message_id}: {e}")
+            if check_data['failed']:
+                await asyncio.sleep(0.3)
+                await send_failed_ips_plain_messages(context.bot, chat_id, check_data['failed'], domain_map, range_map)
 
         if output_format == "5":
-            status_suffix = f"Check {status}. ({len(check_data['checked_ips'])}/{len(check_data['ips'])} checked, {len(check_data['successful'])} successful)"
-            rich_markdown = build_rich_table_markdown(check_data['successful'], title, domain_map, range_map, status_suffix=status_suffix)
-            fallback_messages = build_table_messages(check_data['successful'], title, domain_map, range_map, status_suffix=status_suffix)
+            status_suffix = f"Check {status}. ({len(check_data['checked_ips'])}/{len(check_data['ips'])} checked, {len(check_data['successful'])} successful, {len(check_data['failed'])} failed)"
+            rich_markdown = build_rich_table_markdown(check_data['successful'], title, domain_map, range_map, status_suffix=status_suffix, failed=check_data['failed'])
+            fallback_messages = build_table_messages(check_data['successful'], title, domain_map, range_map, status_suffix=status_suffix, failed=check_data['failed'])
             await send_rich_or_fallback(context.bot, chat_id, rich_markdown, fallback_messages)
 
         if check_data['successful']:
-            final_sorted_ips = sorted([res['proxyIP'] for res in check_data['successful']], key=lambda ip: ipaddress.ip_address(ip.split(':')[0].replace('[','').replace(']','')))
+            final_sorted_ips = sorted([res['proxyIP'] for res in check_data['successful']], key=lambda ip: ipaddress.ip_address(strip_port(ip)))
             copy_text = "\n".join(final_sorted_ips)
             
             if output_format in ["2", "4", "5"]:
@@ -519,15 +726,20 @@ async def process_ips_in_batches(context: ContextTypes.DEFAULT_TYPE, chat_id: in
 async def run_check_and_post(context: ContextTypes.DEFAULT_TYPE, target_chat_id, ips_to_check: list, title: str, confirmation_message, domain_map: dict = None, range_map: dict = None, output_format: str = "4"):
     try:
         successful_results_with_info = []
+        failed_results = []
         batch_size = 30
         for i in range(0, len(ips_to_check), batch_size):
             batch = ips_to_check[i:i + batch_size]
             results = await asyncio.gather(*(validate_proxy_with_worker(ip_obj) for ip_obj in batch))
-            successful_results_with_info.extend([res for res in results if res])
+            for res in results:
+                (successful_results_with_info if res.get('success') else failed_results).append(res)
             await asyncio.sleep(1)
 
         if not successful_results_with_info:
-            await context.bot.send_message(chat_id=target_chat_id, text=f"**{title}**\nNo successful proxies found.", parse_mode=ParseMode.MARKDOWN)
+            no_success_text = f"**{title}**\nNo successful proxies found. ({len(failed_results)} failed)"
+            await context.bot.send_message(chat_id=target_chat_id, text=no_success_text, parse_mode=ParseMode.MARKDOWN)
+            if failed_results and output_format in ["1", "4"]:
+                await send_failed_ips_plain_messages(context.bot, target_chat_id, failed_results, domain_map, range_map)
             return
 
         if output_format in ["1", "4"]:
@@ -566,18 +778,22 @@ async def run_check_and_post(context: ContextTypes.DEFAULT_TYPE, target_chat_id,
                 else:
                     message_parts.append(new_line)
             if message_parts:
-                message_parts.append("\n**Check Completed.**")
+                message_parts.append(f"\n**Check Completed.** ({len(successful_results_with_info)} successful, {len(failed_results)} failed)")
                 final_message_text = "\n".join(message_parts)
                 await context.bot.send_message(chat_id=target_chat_id, text=final_message_text, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
                 await asyncio.sleep(0.5)
 
+            if failed_results:
+                await asyncio.sleep(0.3)
+                await send_failed_ips_plain_messages(context.bot, target_chat_id, failed_results, domain_map, range_map)
+
         if output_format == "5":
-            status_suffix = f"Check Completed. ({len(successful_results_with_info)} successful)"
-            rich_markdown = build_rich_table_markdown(successful_results_with_info, title, domain_map, range_map, status_suffix=status_suffix)
-            fallback_messages = build_table_messages(successful_results_with_info, title, domain_map, range_map, status_suffix=status_suffix)
+            status_suffix = f"Check Completed. ({len(successful_results_with_info)} successful, {len(failed_results)} failed)"
+            rich_markdown = build_rich_table_markdown(successful_results_with_info, title, domain_map, range_map, status_suffix=status_suffix, failed=failed_results)
+            fallback_messages = build_table_messages(successful_results_with_info, title, domain_map, range_map, status_suffix=status_suffix, failed=failed_results)
             await send_rich_or_fallback(context.bot, target_chat_id, rich_markdown, fallback_messages)
 
-        final_sorted_ips = sorted([res['proxyIP'] for res in successful_results_with_info], key=lambda ip: ipaddress.ip_address(ip.split(':')[0].replace('[','').replace(']','')))
+        final_sorted_ips = sorted([res['proxyIP'] for res in successful_results_with_info], key=lambda ip: ipaddress.ip_address(strip_port(ip)))
         copy_text = "\n".join(final_sorted_ips)
         
         if output_format in ["2", "4", "5"]:
@@ -913,7 +1129,7 @@ async def post_select_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.edit_message_text("Select country:", reply_markup=InlineKeyboardMarkup(keyboard))
         return AWAIT_POST_COUNTRY
     else:
-        await query.edit_message_text(f"Send input for `{command}`.")
+        await query.edit_message_text(f"Send input for `{command}`.", parse_mode=ParseMode.MARKDOWN)
         return AWAIT_COMMAND_INPUT
 
 async def post_handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -930,7 +1146,7 @@ async def post_handle_domain_input(update: Update, context: ContextTypes.DEFAULT
     inputs = update.message.text.split()
     valid_domains, error_message, _, _ = await _validate_and_resolve_domains(inputs)
     if error_message:
-        await update.message.reply_text(error_message)
+        await update.message.reply_text(error_message, parse_mode=ParseMode.MARKDOWN)
         return AWAIT_POST_DOMAIN_INPUT
     target_chat_id_str, command = context.user_data.get('target_chat_id'), context.user_data.get('post_command')
     sent_msg = await update.message.reply_text("Domains received. Preparing...")
