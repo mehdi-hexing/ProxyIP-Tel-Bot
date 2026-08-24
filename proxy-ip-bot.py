@@ -436,7 +436,7 @@ async def validate_proxy_with_worker(ip_obj: dict or str) -> dict:
         worker_reachable = True
         worker_error = None
         try:
-            worker_check_url = f"{WORKER_URL}/api/check/{quote(proxy_address, safe='')}"
+            worker_check_url = f"{WORKER_URL}/api/v1/check?proxyip={quote(proxy_address, safe='')}"
             response = await client.get(worker_check_url, timeout=12.0)
             response.raise_for_status()
             data = response.json()
