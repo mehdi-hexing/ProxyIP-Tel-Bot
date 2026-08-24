@@ -10,6 +10,7 @@ import re
 import ipaddress
 import json
 import html
+from urllib.parse import quote
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, ConversationHandler, MessageHandler, filters
 from telegram.constants import ParseMode, ChatType, ChatMemberStatus
@@ -346,48 +347,78 @@ FALLBACK_API_URLS = [
 ]
 # YOU CAN FIND SOURCE IN MY "ProxyIP-Checker-API" REPOSITORY
 
-async def _check_via_fallback_api(client: httpx.AsyncClient, url: str, proxy_address: str) -> dict | None:
+FALLBACK_API_TIMEOUT = 60.0
+
+async def _check_via_fallback_api(client: httpx.AsyncClient, url: str, proxy_address: str) -> dict:
     """Only used when the Cloudflare Worker domain itself (WORKER_URL) is
     unreachable. Talks directly to a backend checker API, bypassing the
     Worker entirely for this one IP. Results are more bare-bones (no
     Worker-side geo/AS enrichment) but the proxy check itself still happens
     instead of silently failing while the Worker domain is down.
+
+    Each entry in FALLBACK_API_URLS already ends in `?proxyip=`, so the IP is
+    appended directly onto the URL string (matching that syntax exactly)
+    rather than passed via httpx's `params=`, which merges with -- rather
+    than replaces -- an existing query string and would otherwise send the
+    IP as a second, duplicate `proxyip` value alongside the empty one baked
+    into the URL.
+
+    Always returns a dict (never bare None) so the caller can tell apart
+    three genuinely different outcomes: the IP checked out as a working
+    proxy (success=True), the backend was reached fine and confirmed it
+    ISN'T a working proxy (success=False, reached=True), or the backend
+    itself couldn't be reached at all (success=False, reached=False) --
+    collapsing the last two into one used to make "the fallback backend is
+    down" and "the fallback backend correctly said no" look identical.
     """
     try:
-        resp = await client.get(url, params={'proxyip': proxy_address}, timeout=10.0)
+        full_url = f"{url}{quote(proxy_address, safe='')}"
+        resp = await client.get(full_url, timeout=FALLBACK_API_TIMEOUT)
         resp.raise_for_status()
         api_data = resp.json()
         if api_data.get('proxyip') is True:
             host = url.split('/')[2] if '//' in url else url
             return {
                 'success': True,
+                'reached': True,
                 'proxyIP': proxy_address,
                 'ping': api_data.get('ping'),
                 'info': {'country': 'N/A', 'countryCode': 'N/A', 'as': api_data.get('asOrganization', 'N/A')},
                 'method': f'Direct Fallback API ({host})',
             }
-        return None
+        return {'success': False, 'reached': True}
     except Exception as e:
-        logger.warning(f"Fallback API {url} failed for {proxy_address}: {e}")
-        return None
+        logger.warning(f"Fallback API {url} failed for {proxy_address}: {e!r}")
+        return {'success': False, 'reached': False}
 
-async def _check_via_fallback_apis_raced(client: httpx.AsyncClient, proxy_address: str) -> dict | None:
+async def _check_via_fallback_apis_raced(client: httpx.AsyncClient, proxy_address: str) -> dict:
     """Races every configured fallback backend concurrently and returns
     whichever succeeds first, instead of trying one URL after another. A
     single sleeping/slow free-tier instance (Render cold starts can take
     30-50s) would otherwise sink the whole check even when a second backend
-    is perfectly healthy and would have answered in under a second."""
+    is perfectly healthy and would have answered in under a second.
+
+    Only returns immediately on a positive hit -- a negative-but-reached
+    result keeps the other task(s) running, since one backend confirming
+    "not a proxy" doesn't mean a still-pending backend won't confirm the
+    opposite. `reached` on the final dict is True as soon as ANY backend
+    was actually contacted, even if none of them found a working proxy --
+    that's what lets the caller distinguish "fallback ran and said no" from
+    "fallback never even got a response"."""
     tasks = [asyncio.create_task(_check_via_fallback_api(client, url, proxy_address)) for url in FALLBACK_API_URLS]
+    any_reached = False
     try:
         for coro in asyncio.as_completed(tasks):
             result = await coro
-            if result:
+            if result.get('success'):
                 return result
+            if result.get('reached'):
+                any_reached = True
     finally:
         for t in tasks:
             if not t.done():
                 t.cancel()
-    return None
+    return {'success': False, 'reached': any_reached}
 
 def _risk_info_from_worker_payload(data: dict) -> dict:
     """The Worker's own /api/check now embeds a risk score directly in its
@@ -405,14 +436,14 @@ async def validate_proxy_with_worker(ip_obj: dict or str) -> dict:
         worker_reachable = True
         worker_error = None
         try:
-            params = {'proxyip': proxy_address} 
-            response = await client.get(f"{WORKER_URL}/api/check", params=params, timeout=12.0)
+            worker_check_url = f"{WORKER_URL}/api/check/{quote(proxy_address, safe='')}"
+            response = await client.get(worker_check_url, timeout=12.0)
             response.raise_for_status()
             data = response.json()
         except Exception as e:
             worker_reachable = False
             worker_error = str(e)
-            logger.warning(f"Worker unreachable for {proxy_address} ({e}); racing direct fallback APIs.")
+            logger.warning(f"Worker unreachable for {proxy_address} ({e!r}); racing direct fallback APIs.")
 
         if not worker_reachable:
             data = await _check_via_fallback_apis_raced(client, proxy_address)
@@ -438,7 +469,9 @@ async def validate_proxy_with_worker(ip_obj: dict or str) -> dict:
             if data and data.get("error"):
                 return _fail(data["error"])
             if not worker_reachable:
-                return _fail(f"Worker unreachable ({worker_error}) and all fallback APIs failed.")
+                if data and data.get("reached"):
+                    return _fail(f"Worker unreachable ({worker_error}); fallback API(s) reached and confirmed this is not a valid proxy.")
+                return _fail(f"Worker unreachable ({worker_error}) and no fallback API could be reached either.")
             return _fail("Not a valid proxy.")
         except Exception as e:
             logger.error(f"Worker API Error for {proxy_address}: {e}")
@@ -681,11 +714,11 @@ async def process_ips_in_batches(context: ContextTypes.DEFAULT_TYPE, chat_id: in
             for i, message_id in enumerate(check_data['result_message_ids']):
                 try:
                     final_text = last_sent_texts.get(i)
+                    if i == 0 and not check_data['successful']:
+                        final_text = f"**{title}**\nNo successful proxies found."
                     if not final_text: continue
                     if f"Check {status}" not in final_text:
                         final_text += f"\n\n**Check {status}.**"
-                    if i == 0 and not check_data['successful']:
-                         final_text = f"**{title}**\nNo successful proxies found.\n\n**Check {status}.**"
                     await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=final_text, parse_mode=ParseMode.MARKDOWN, reply_markup=None, disable_web_page_preview=True)
                 except Exception as e:
                     logger.error(f"Error during finalization of message {message_id}: {e}")
