@@ -1,6 +1,7 @@
 # In 31 Mordad of 1405, this project was completed and thanks to Dìana for Free Proxy IPs.
 # 17:00 PM
 import os
+import time
 import logging
 import uuid
 import asyncio
@@ -14,7 +15,7 @@ from urllib.parse import quote
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, ConversationHandler, MessageHandler, filters
 from telegram.constants import ParseMode, ChatType, ChatMemberStatus
-from telegram.error import BadRequest
+from telegram.error import BadRequest, RetryAfter
 from termcolor import cprint
 
 logging.basicConfig(
@@ -106,6 +107,86 @@ def strip_port(ip: str) -> str:
     if s.count(':') == 1:
         return s.split(':')[0]
     return s.strip('[]')
+
+async def _send_with_flood_retry(send_func, *args, max_retries: int = 3, **kwargs):
+    """Calls a Bot method (send_message, edit_message_text, send_document,
+    ...) and, if Telegram's flood control kicks in (RetryAfter -- exactly
+    the 'Flood control exceeded. Retry in N seconds' error), waits the time
+    Telegram asked for and retries instead of letting it propagate up
+    through a caller's catch-all except, which previously aborted every
+    remaining step of a post (files, remaining chunks, etc) the moment a
+    single rate-limit hit occurred partway through a large run."""
+    for attempt in range(max_retries + 1):
+        try:
+            return await send_func(*args, **kwargs)
+        except RetryAfter as e:
+            wait_s = e.retry_after + 1
+            if attempt >= max_retries:
+                raise
+            logger.warning(f"Flood control hit, waiting {wait_s}s before retry ({attempt + 1}/{max_retries})")
+            await asyncio.sleep(wait_s)
+
+def format_duration(seconds: float) -> str:
+    seconds = int(max(0, round(seconds)))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h {m}m {s}s"
+    if m:
+        return f"{m}m {s}s"
+    return f"{s}s"
+
+def render_progress_bar(done: int, total: int, elapsed_seconds: float, bar_width: int = 20) -> str:
+    """Text-only progress bar (block-drawing characters, not emoji) plus an
+    ETA derived from the observed rate so far -- used while a /post run's
+    checking phase is in flight, so the user isn't staring at a static
+    'started in background' message with no sense of how long is left."""
+    total = max(total, 1)
+    ratio = min(max(done / total, 0.0), 1.0)
+    filled = int(round(ratio * bar_width))
+    bar = "█" * filled + "░" * (bar_width - filled)
+    percent = int(ratio * 100)
+    rate = done / elapsed_seconds if elapsed_seconds > 0 and done > 0 else 0
+    remaining_s = (total - done) / rate if rate > 0 else 0
+    return (
+        f"[{bar}] {percent}%\n"
+        f"Checked: {done}/{total}\n"
+        f"Elapsed: {format_duration(elapsed_seconds)}  •  Remaining: ~{format_duration(remaining_s)}"
+    )
+
+async def send_copy_ip_messages(bot, chat_id: int, copy_text: str):
+    """Send the 'tap to copy' IP list, chunked to stay under Telegram's
+    ~4096-char hard message limit. Unlike the detailed report (which already
+    chunks at TELEGRAM_MESSAGE_LIMIT per message), this list has no per-line
+    cap of its own, so a large successful-IP count (e.g. 300+) previously
+    built one giant message, tripped the limit, raised BadRequest, and -- via
+    the caller's catch-all except -- skipped every step after it (including
+    sending the TXT/CSV files). Each chunk is sent in its own try/except so
+    one failure here never blocks the rest of the run."""
+    if not copy_text:
+        return
+    CHUNK_LIMIT = 3800
+    lines = copy_text.split("\n")
+    chunks, current, current_len = [], [], 0
+    for line in lines:
+        added = len(line) + 1
+        if current and current_len + added > CHUNK_LIMIT:
+            chunks.append("\n".join(current))
+            current, current_len = [line], len(line) + 1
+        else:
+            current.append(line)
+            current_len += added
+    if current:
+        chunks.append("\n".join(current))
+
+    for i, chunk in enumerate(chunks):
+        prefix = "To copy all IPs, tap the code block below:" if i == 0 else "**Continued:**"
+        try:
+            await _send_with_flood_retry(bot.send_message, chat_id=chat_id, text=f"{prefix}\n```\n{chunk}\n```", parse_mode=ParseMode.MARKDOWN_V2)
+        except Exception as e:
+            logger.error(f"Failed to send copy-IP chunk {i + 1}/{len(chunks)}: {e}")
+        if i < len(chunks) - 1:
+            await asyncio.sleep(0.4)
 
 async def fetch_mirror_data(client: httpx.AsyncClient, ip: str) -> dict:
     """Single shared GET to the scamalytics mirror. Both the risk score AND
@@ -206,21 +287,21 @@ def build_failed_table_html(failed: list, domain_map: dict = None, range_map: di
         lines.append("".join(str(cell).ljust(w) for cell, w in zip(row, (w for _, w in FAILED_TABLE_COLUMNS))).rstrip())
     return "\n".join(lines)
 
-def build_failed_table_markdown(failed: list, domain_map: dict = None, range_map: dict = None) -> str:
+def build_failed_table_markdown(failed: list, domain_map: dict = None, range_map: dict = None, start_index: int = 0) -> str:
     lines = ["| # | IP |", "|---|---|"]
     for idx, res in enumerate(failed):
-        prefix = get_result_source_prefix(res, domain_map, range_map).strip() or str(idx + 1)
+        prefix = get_result_source_prefix(res, domain_map, range_map).strip() or str(start_index + idx + 1)
         ip_cell = str(res.get('proxyIP', 'N/A')).replace('|', '\\|')
         lines.append(f"| {prefix} | `{ip_cell}` |")
     return "\n".join(lines)
 
-def build_results_table_markdown(results: list, domain_map: dict = None, range_map: dict = None) -> str:
+def build_results_table_markdown(results: list, domain_map: dict = None, range_map: dict = None, start_index: int = 0) -> str:
     """Native GFM pipe-table markdown. As of Telegram Bot API 10.1 ('Rich
     Messages'), this renders as a REAL table in the client -- no more manual
     monospace <pre> column-padding hacks."""
     lines = ["| # | IP | Ping | Risk | Country |", "|---|---|---|---|---|"]
     for idx, res in enumerate(results):
-        prefix = get_result_source_prefix(res, domain_map, range_map).strip() or str(idx + 1)
+        prefix = get_result_source_prefix(res, domain_map, range_map).strip() or str(start_index + idx + 1)
         ip_cell = str(res.get('proxyIP', 'N/A')).replace('|', '\\|')
         ping_value = res.get('ping')
         ping_cell = f"{ping_value}ms" if ping_value is not None else "N/A"
@@ -230,32 +311,85 @@ def build_results_table_markdown(results: list, domain_map: dict = None, range_m
         lines.append(f"| {prefix} | `{ip_cell}` | {ping_cell} | {risk_cell} | {country_cell} |")
     return "\n".join(lines)
 
-def build_rich_table_markdown(results: list, title: str, domain_map: dict = None, range_map: dict = None, status_suffix: str = "", failed: list = None) -> str:
-    """Wraps the native table in a native <details> block (Rich Markdown allows
-    embedding supported HTML tags directly), so it starts collapsed with
-    Telegram's own 'Show more' toggle -- the real equivalent of what the old
-    blockquote-expandable hack was approximating. Failed IPs (if any) get
-    their own separate collapsed <details> block right underneath, so they're
-    visible but don't clutter the successful-results view by default.
+def _markdown_row_char_estimate(res: dict) -> int:
+    """Rough length of one rendered markdown table row (`| # | `IP` | ping |
+    risk | country |`), used to decide chunk boundaries before the row is
+    actually built. Slightly over-estimates (fixed padding for pipes/backticks)
+    so chunks land a bit under max_chars rather than over."""
+    ip_len = len(str(res.get('proxyIP', 'N/A')))
+    country_len = len(str((res.get('info') or {}).get('country', 'N/A')))
+    risk_len = len(str((res.get('risk_info') or {}).get('risk', 'N/A')))
+    return ip_len + country_len + risk_len + 30
 
-    The <summary> line itself is kept as short, plain text -- content inside
-    an inline HTML tag like <summary> isn't run back through the Markdown
-    parser, so any `backtick`/**bold** markers placed there would show up as
-    literal characters instead of being rendered. Anything with Markdown
-    styling (the per-domain/range list with its `code` ticks) is placed as
-    its own line *outside* the <summary>, right above the table, where
-    normal Markdown parsing still applies."""
+def _chunk_indices_by_char_budget(items: list, row_char_estimator, max_chars: int = 3000, overhead: int = 250, max_items: int = 80) -> list:
+    """Groups item indices into (start, end) ranges so the estimated total
+    text of each group stays under max_chars (accounting for a fixed
+    overhead for the surrounding <details>/header wrapper), AND so each
+    group holds at most max_items rows -- Telegram's practical ceiling of
+    ~100 formatting entities per message means even short, char-cheap rows
+    (backtick-wrapped IPs) need a hard row-count cap, not just a char-count
+    one. Each item -- an IP row with all its columns -- is treated as a
+    discrete, indivisible unit: a group boundary only ever falls *between*
+    two items, never through the middle of one, even if a single row alone
+    would exceed max_chars (that lone row still becomes its own group rather
+    than being torn apart)."""
+    chunks = []
+    if not items:
+        return chunks
+    current_start = 0
+    current_len = overhead
+    current_count = 0
+    for i, item in enumerate(items):
+        row_len = row_char_estimator(item) + 1
+        if i > current_start and (current_len + row_len > max_chars or current_count >= max_items):
+            chunks.append((current_start, i))
+            current_start = i
+            current_len = overhead
+            current_count = 0
+        current_len += row_len
+        current_count += 1
+    chunks.append((current_start, len(items)))
+    return chunks
+
+def build_rich_table_messages(results: list, title: str, domain_map: dict = None, range_map: dict = None, status_suffix: str = "", failed: list = None, max_chars: int = 3000) -> list:
+    """Same native-table <details> format as before, but chunked across
+    several messages once the estimated size approaches Telegram's rich
+    message limit -- previously this returned ONE unbounded string, so a
+    large result set (e.g. 300+ IPs) could exceed the limit and fail to send
+    entirely. Chunking happens strictly on IP-row boundaries (see
+    _chunk_indices_by_char_budget): each IP's full row -- number, address,
+    ping, risk, country -- is a discrete unit that always stays together in
+    one message, so a row is never split with half its columns in one
+    message and half at the start of the next."""
     title_line, *rest = title.split('\n', 1)
     clean_summary = title_line.replace('**', '').strip()
     styled_subtitle = rest[0].strip() if rest else ""
-    table_md = build_results_table_markdown(results, domain_map, range_map)
     subtitle_block = f"{styled_subtitle}\n\n" if styled_subtitle else ""
-    suffix = f"\n\n{status_suffix}" if status_suffix else ""
-    parts = [f"<details><summary>{clean_summary} ({len(results)} successful)</summary>\n\n{subtitle_block}{table_md}{suffix}\n\n</details>"]
+
+    row_chunks = _chunk_indices_by_char_budget(results, _markdown_row_char_estimate, max_chars=max_chars)
+    messages = []
+    for ci, (start, end) in enumerate(row_chunks):
+        chunk_results = results[start:end]
+        table_md = build_results_table_markdown(chunk_results, domain_map, range_map, start_index=start)
+        is_first = (ci == 0)
+        summary = f"{clean_summary} ({len(results)} successful)" if is_first else f"Continuation {clean_summary}"
+        suffix = f"\n\n{status_suffix}" if (status_suffix and ci == len(row_chunks) - 1) else ""
+        body = f"<details><summary>{summary}</summary>\n\n{subtitle_block if is_first else ''}{table_md}{suffix}\n\n</details>"
+        messages.append(body)
+    if not messages:
+        summary = f"{clean_summary} (0 successful)"
+        no_results_suffix = f"\n\n{status_suffix}" if status_suffix else ""
+        messages.append(f"<details><summary>{summary}</summary>\n\n{subtitle_block}No successful proxies found.{no_results_suffix}\n\n</details>")
+
     if failed:
-        failed_md = build_failed_table_markdown(failed, domain_map, range_map)
-        parts.append(f"<details><summary>❌ Failed IPs ({len(failed)})</summary>\n\n{failed_md}\n\n</details>")
-    return "\n\n".join(parts)
+        failed_chunks = _chunk_indices_by_char_budget(failed, _markdown_row_char_estimate, max_chars=max_chars)
+        for fi, (start, end) in enumerate(failed_chunks):
+            chunk_failed = failed[start:end]
+            failed_md = build_failed_table_markdown(chunk_failed, domain_map, range_map, start_index=start)
+            summary = f"❌ Failed IPs ({len(failed)})" if fi == 0 else "❌ Failed IPs (continued)"
+            messages.append(f"<details><summary>{summary}</summary>\n\n{failed_md}\n\n</details>")
+
+    return messages
 _rich_capability = {"supported": True}
 
 async def send_rich_or_fallback(bot, chat_id, markdown_text: str, fallback_messages: list[str], fallback_parse_mode=ParseMode.HTML, reply_markup=None) -> bool:
@@ -268,7 +402,7 @@ async def send_rich_or_fallback(bot, chat_id, markdown_text: str, fallback_messa
             api_kwargs = {"chat_id": chat_id, "rich_message": {"markdown": markdown_text}}
             if reply_markup:
                 api_kwargs["reply_markup"] = reply_markup.to_dict()
-            await bot.do_api_request(endpoint="sendRichMessage", api_kwargs=api_kwargs)
+            await _send_with_flood_retry(bot.do_api_request, endpoint="sendRichMessage", api_kwargs=api_kwargs)
             return True
         except BadRequest as e:
             msg = str(e).lower()
@@ -282,7 +416,7 @@ async def send_rich_or_fallback(bot, chat_id, markdown_text: str, fallback_messa
 
     for msg_text in fallback_messages:
         try:
-            await bot.send_message(chat_id=chat_id, text=msg_text, parse_mode=fallback_parse_mode, reply_markup=reply_markup, disable_web_page_preview=True)
+            await _send_with_flood_retry(bot.send_message, chat_id=chat_id, text=msg_text, parse_mode=fallback_parse_mode, reply_markup=reply_markup, disable_web_page_preview=True)
         except Exception as e:
             logger.error(f"Fallback send also failed: {e}")
     return False
@@ -305,22 +439,30 @@ def wrap_expandable_blockquote(inner_text_html_escaped: str, header_html_escaped
     prefix = f"{header_html_escaped}\n" if header_html_escaped else ""
     return f"{prefix}<blockquote expandable><pre>{inner_text_html_escaped}</pre></blockquote>"
 
-def build_table_messages(results: list, title: str, domain_map: dict = None, range_map: dict = None, status_suffix: str = "", failed: list = None) -> list[str]:
+def build_table_messages(results: list, title: str, domain_map: dict = None, range_map: dict = None, status_suffix: str = "", failed: list = None, chunk_boundaries: list = None, failed_chunk_boundaries: list = None) -> list[str]:
     """Splits results into one or more HTML messages, each an expandable
     monospace table, respecting Telegram's ~4096 char message limit. Failed
     IPs (if any) get their own separate expandable block(s) appended after
-    the successful ones."""
+    the successful ones.
+
+    chunk_boundaries/failed_chunk_boundaries let a caller pass the exact same
+    (start, end) row groupings used for the rich-markdown version (see
+    build_rich_table_messages), so the two lists pair up index-for-index --
+    otherwise falling back mid-run (rich message N fails, so message N's
+    fallback is sent instead) could send a different set of IPs than what
+    the rich attempt covered. When omitted, boundaries are computed fresh
+    from the same char-budget chunker used for the rich version."""
     TELEGRAM_LIMIT = 4000
-    ROWS_PER_CHUNK = 40
     plain_title = _strip_md_markers(title)
     messages = []
-    for i in range(0, len(results), ROWS_PER_CHUNK):
-        chunk = results[i:i + ROWS_PER_CHUNK]
-        table_text = build_results_table_html(chunk, domain_map, range_map, start_index=i)
-        is_first = (i == 0)
+    row_chunks = chunk_boundaries if chunk_boundaries is not None else _chunk_indices_by_char_budget(results, _markdown_row_char_estimate, max_chars=3000)
+    for ci, (start, end) in enumerate(row_chunks):
+        chunk = results[start:end]
+        table_text = build_results_table_html(chunk, domain_map, range_map, start_index=start)
+        is_first = (ci == 0)
         header = html.escape(plain_title) if is_first else html.escape(f"Continuation of {plain_title}")
         body = wrap_expandable_blockquote(html.escape(table_text), header_html_escaped=header)
-        if status_suffix and i + ROWS_PER_CHUNK >= len(results):
+        if status_suffix and ci == len(row_chunks) - 1:
             body += f"\n{html.escape(status_suffix)}"
         if len(body) > TELEGRAM_LIMIT:
             body = body[:TELEGRAM_LIMIT - 20] + "...</pre></blockquote>"
@@ -329,10 +471,11 @@ def build_table_messages(results: list, title: str, domain_map: dict = None, ran
         messages = [f"<b>{html.escape(plain_title)}</b>\nNo successful proxies found."]
 
     if failed:
-        for i in range(0, len(failed), ROWS_PER_CHUNK):
-            chunk = failed[i:i + ROWS_PER_CHUNK]
-            table_text = build_failed_table_html(chunk, domain_map, range_map, start_index=i)
-            header = html.escape(f"❌ Failed IPs ({len(failed)})") if i == 0 else html.escape("❌ Failed IPs (continued)")
+        f_chunks = failed_chunk_boundaries if failed_chunk_boundaries is not None else _chunk_indices_by_char_budget(failed, _markdown_row_char_estimate, max_chars=3000)
+        for fi, (start, end) in enumerate(f_chunks):
+            chunk = failed[start:end]
+            table_text = build_failed_table_html(chunk, domain_map, range_map, start_index=start)
+            header = html.escape(f"❌ Failed IPs ({len(failed)})") if fi == 0 else html.escape("❌ Failed IPs (continued)")
             body = wrap_expandable_blockquote(html.escape(table_text), header_html_escaped=header)
             if len(body) > TELEGRAM_LIMIT:
                 body = body[:TELEGRAM_LIMIT - 20] + "...</pre></blockquote>"
@@ -345,32 +488,47 @@ async def send_failed_ips_plain_messages(bot, chat_id, failed: list, domain_map:
     equivalent to Rich Markdown's <details> — failed IPs are sent as their
     own clearly-labelled plain message(s) instead, separate from (and after)
     the successful-results messages. Only lists the IPs themselves; the
-    failure reason isn't shown since it's not actionable for the user."""
+    failure reason isn't shown since it's not actionable for the user.
+
+    Chunking respects TWO limits, not just message length: Telegram also
+    caps how many formatting entities (each backtick-wrapped IP is one) fit
+    in a single message at around 100 -- with short IP lines, the old
+    char-only chunking could pack 150-200+ of them into one 4000-char
+    message, well past that ceiling, and the backticks would stop rendering
+    (falling back to plain/auto-linked text) partway through."""
     if not failed:
         return
     TELEGRAM_LIMIT = 4000
+    MAX_ITEMS_PER_CHUNK = 80
     lines = [f"**❌ Failed IPs ({len(failed)})**", "---"]
+    item_count = 0
     messages = []
     for idx, res in enumerate(failed):
-        prefix = get_result_source_prefix(res, domain_map, range_map).strip() or str(idx + 1)
+        prefix = get_result_source_prefix(res, domain_map, range_map).strip() or format_number_with_emojis(idx + 1)
         ip = res.get('proxyIP', 'N/A')
         line = f"{prefix} `{ip}`"
-        if len("\n".join(lines)) + len(line) + 2 > TELEGRAM_LIMIT:
+        would_exceed_len = len("\n".join(lines)) + len(line) + 2 > TELEGRAM_LIMIT
+        would_exceed_items = item_count >= MAX_ITEMS_PER_CHUNK
+        if would_exceed_len or would_exceed_items:
             messages.append("\n".join(lines))
             lines = ["**❌ Failed IPs (continued)**", "---", line]
+            item_count = 1
         else:
             lines.append(line)
+            item_count += 1
     if lines:
         messages.append("\n".join(lines))
-    for msg in messages:
+    for i, msg in enumerate(messages):
         try:
-            await bot.send_message(chat_id=chat_id, text=msg, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
+            await _send_with_flood_retry(bot.send_message, chat_id=chat_id, text=msg, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
         except Exception as e:
             logger.error(f"Failed to send failed-IPs message: {e}")
+        if i < len(messages) - 1:
+            await asyncio.sleep(0.4)
 
 FALLBACK_API_URLS = [
-    "https://YourServer:PORT/api/v1/check?proxyip=",
-    "https://Your-Render-API.onrender.com/api/v1/check?proxyip=",
+    "https://Your-Server:PORT/api/v1/check?proxyip=",
+    "https://Your-Second-API.onrender.com/api/v1/check?proxyip=",
 ]
 # YOU CAN FIND SOURCE IN MY "ProxyIP-Checker-API" REPOSITORY
 
@@ -767,16 +925,20 @@ async def process_ips_in_batches(context: ContextTypes.DEFAULT_TYPE, chat_id: in
 
         if output_format in ["4", "5"]:
             status_suffix = f"Check {status}. ({len(check_data['checked_ips'])}/{len(check_data['ips'])} checked, {len(check_data['successful'])} successful, {len(check_data['failed'])} failed)"
-            rich_markdown = build_rich_table_markdown(check_data['successful'], title, domain_map, range_map, status_suffix=status_suffix, failed=check_data['failed'])
-            fallback_messages = build_table_messages(check_data['successful'], title, domain_map, range_map, status_suffix=status_suffix, failed=check_data['failed'])
-            await send_rich_or_fallback(context.bot, chat_id, rich_markdown, fallback_messages)
+            row_chunks = _chunk_indices_by_char_budget(check_data['successful'], _markdown_row_char_estimate, max_chars=3000)
+            failed_chunks = _chunk_indices_by_char_budget(check_data['failed'], _markdown_row_char_estimate, max_chars=3000)
+            rich_messages = build_rich_table_messages(check_data['successful'], title, domain_map, range_map, status_suffix=status_suffix, failed=check_data['failed'])
+            fallback_messages = build_table_messages(check_data['successful'], title, domain_map, range_map, status_suffix=status_suffix, failed=check_data['failed'], chunk_boundaries=row_chunks, failed_chunk_boundaries=failed_chunks)
+            for rich_msg, fallback_msg in zip(rich_messages, fallback_messages):
+                await send_rich_or_fallback(context.bot, chat_id, rich_msg, [fallback_msg])
+                await asyncio.sleep(0.4)
 
         if check_data['successful']:
             final_sorted_ips = sorted([res['proxyIP'] for res in check_data['successful']], key=lambda ip: ipaddress.ip_address(strip_port(ip)))
             copy_text = "\n".join(final_sorted_ips)
             
             if output_format in ["2", "4", "5"]:
-                await context.bot.send_message(chat_id=chat_id, text=f"To copy all IPs, tap the code block below:\n```\n{copy_text}\n```", parse_mode=ParseMode.MARKDOWN_V2)
+                await send_copy_ip_messages(context.bot, chat_id, copy_text)
 
             if output_format in ["3", "4"]:
                 file_name = f"successful_proxies_{uuid.uuid4().hex[:6]}"
@@ -800,16 +962,28 @@ async def run_check_and_post(context: ContextTypes.DEFAULT_TYPE, target_chat_id,
         successful_results_with_info = []
         failed_results = []
         batch_size = 30
-        for i in range(0, len(ips_to_check), batch_size):
+        total_ips = len(ips_to_check)
+        start_time = time.monotonic()
+        for i in range(0, total_ips, batch_size):
             batch = ips_to_check[i:i + batch_size]
             results = await asyncio.gather(*(validate_proxy_with_worker(ip_obj) for ip_obj in batch))
             for res in results:
                 (successful_results_with_info if res.get('success') else failed_results).append(res)
+            checked_so_far = len(successful_results_with_info) + len(failed_results)
+            elapsed = time.monotonic() - start_time
+            progress_text = f"🔍 Checking proxies...\n\n{render_progress_bar(checked_so_far, total_ips, elapsed)}"
+            try:
+                await _send_with_flood_retry(confirmation_message.edit_text, progress_text)
+            except BadRequest as e:
+                if "Message is not modified" not in str(e):
+                    logger.warning(f"Progress update failed: {e}")
+            except Exception as e:
+                logger.warning(f"Progress update failed: {e}")
             await asyncio.sleep(1)
 
         if not successful_results_with_info:
             no_success_text = f"**{title}**\nNo successful proxies found. ({len(failed_results)} failed)"
-            await context.bot.send_message(chat_id=target_chat_id, text=no_success_text, parse_mode=ParseMode.MARKDOWN)
+            await _send_with_flood_retry(context.bot.send_message, chat_id=target_chat_id, text=no_success_text, parse_mode=ParseMode.MARKDOWN)
             if failed_results and output_format in ["1", "4"]:
                 await send_failed_ips_plain_messages(context.bot, target_chat_id, failed_results, domain_map, range_map)
             return
@@ -842,7 +1016,7 @@ async def run_check_and_post(context: ContextTypes.DEFAULT_TYPE, target_chat_id,
                 full_content_for_block = f"{line1}\n{line2}"
                 new_line = f"```{full_content_for_block}```"
                 if len("\n".join(message_parts)) + len(new_line) + 2 > TELEGRAM_MESSAGE_LIMIT:
-                    await context.bot.send_message(chat_id=target_chat_id, text="\n".join(message_parts), parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
+                    await _send_with_flood_retry(context.bot.send_message, chat_id=target_chat_id, text="\n".join(message_parts), parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
                     await asyncio.sleep(0.5)
                     message_count += 1
                     new_title = f"**Continuation {title.strip('**')}**"
@@ -852,7 +1026,7 @@ async def run_check_and_post(context: ContextTypes.DEFAULT_TYPE, target_chat_id,
             if message_parts:
                 message_parts.append(f"\n**Check Completed.** ({len(successful_results_with_info)} successful, {len(failed_results)} failed)")
                 final_message_text = "\n".join(message_parts)
-                await context.bot.send_message(chat_id=target_chat_id, text=final_message_text, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
+                await _send_with_flood_retry(context.bot.send_message, chat_id=target_chat_id, text=final_message_text, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
                 await asyncio.sleep(0.5)
 
             if failed_results:
@@ -861,22 +1035,27 @@ async def run_check_and_post(context: ContextTypes.DEFAULT_TYPE, target_chat_id,
 
         if output_format in ["4", "5"]:
             status_suffix = f"Check Completed. ({len(successful_results_with_info)} successful, {len(failed_results)} failed)"
-            rich_markdown = build_rich_table_markdown(successful_results_with_info, title, domain_map, range_map, status_suffix=status_suffix, failed=failed_results)
-            fallback_messages = build_table_messages(successful_results_with_info, title, domain_map, range_map, status_suffix=status_suffix, failed=failed_results)
-            await send_rich_or_fallback(context.bot, target_chat_id, rich_markdown, fallback_messages)
+            row_chunks = _chunk_indices_by_char_budget(successful_results_with_info, _markdown_row_char_estimate, max_chars=3000)
+            failed_chunks = _chunk_indices_by_char_budget(failed_results, _markdown_row_char_estimate, max_chars=3000)
+            rich_messages = build_rich_table_messages(successful_results_with_info, title, domain_map, range_map, status_suffix=status_suffix, failed=failed_results)
+            fallback_messages = build_table_messages(successful_results_with_info, title, domain_map, range_map, status_suffix=status_suffix, failed=failed_results, chunk_boundaries=row_chunks, failed_chunk_boundaries=failed_chunks)
+            for rich_msg, fallback_msg in zip(rich_messages, fallback_messages):
+                await send_rich_or_fallback(context.bot, target_chat_id, rich_msg, [fallback_msg])
+                await asyncio.sleep(0.4)
 
         final_sorted_ips = sorted([res['proxyIP'] for res in successful_results_with_info], key=lambda ip: ipaddress.ip_address(strip_port(ip)))
         copy_text = "\n".join(final_sorted_ips)
         
         if output_format in ["2", "4", "5"]:
-            await context.bot.send_message(chat_id=target_chat_id, text=f"To copy all IPs, tap the code block below:\n```\n{copy_text}\n```", parse_mode=ParseMode.MARKDOWN_V2)
+            await send_copy_ip_messages(context.bot, target_chat_id, copy_text)
         
         if output_format in ["3", "4"]:
             file_name = f"successful_proxies_{uuid.uuid4().hex[:6]}"
             txt_file = io.BytesIO(copy_text.encode('utf-8'))
-            await context.bot.send_document(chat_id=target_chat_id, document=txt_file, filename=f"{file_name}.txt")
+            await _send_with_flood_retry(context.bot.send_document, chat_id=target_chat_id, document=txt_file, filename=f"{file_name}.txt")
+            await asyncio.sleep(0.4)
             csv_file = io.BytesIO(copy_text.encode('utf-8'))
-            await context.bot.send_document(chat_id=target_chat_id, document=csv_file, filename=f"{file_name}.csv")
+            await _send_with_flood_retry(context.bot.send_document, chat_id=target_chat_id, document=csv_file, filename=f"{file_name}.csv")
 
     except Exception as e:
         logger.error(f"Error in run_check_and_post: {e}")
