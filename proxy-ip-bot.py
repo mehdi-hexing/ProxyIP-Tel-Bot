@@ -107,22 +107,49 @@ def strip_port(ip: str) -> str:
         return s.split(':')[0]
     return s.strip('[]')
 
-async def fetch_risk_info(client: httpx.AsyncClient, ip: str) -> dict:
-    """Read the actual risk/score JSON from the scamalytics mirror instead of
-    just handing the user a link to click. Expected shape:
-    {"info": {"success": true, "fraud_score": 23, "risk": "medium"}, "details": {...}}
+async def fetch_mirror_data(client: httpx.AsyncClient, ip: str) -> dict:
+    """Single shared GET to the scamalytics mirror. Both the risk score AND
+    the geo/country data live in this one response (`info` for risk,
+    `details` for geo) -- fetching it once and deriving both from it avoids
+    two separate round-trips to the same URL. Expected shape:
+    {"info": {"success": true, "fraud_score": 23, "risk": "medium"},
+     "details": {"country": "...", "country_code": "...", "isp": "...", "organization": "...", "asn": "..."}}
+    Returns {} on any failure so callers can treat that as "nothing available"
+    without needing their own try/except.
     """
     clean_ip = strip_port(ip)
     try:
         resp = await client.get(RISK_SCORE_URL_TEMPLATE.format(ip=clean_ip), timeout=10.0)
         resp.raise_for_status()
-        data = resp.json()
-        info = data.get("info", {})
-        if info.get("success"):
-            return {"risk": info.get("risk", "unknown"), "score": info.get("fraud_score")}
+        return resp.json() or {}
     except Exception as e:
-        logger.warning(f"Risk lookup failed for {clean_ip}: {e}")
+        logger.warning(f"Mirror lookup failed for {clean_ip}: {e}")
+        return {}
+
+def _risk_info_from_mirror_data(data: dict) -> dict:
+    info = (data or {}).get("info", {})
+    if info.get("success"):
+        return {"risk": info.get("risk", "unknown"), "score": info.get("fraud_score")}
     return {}
+
+def _geo_info_from_mirror_data(data: dict) -> dict:
+    """Same shape the Worker's own /api/check returns under `info`, so this
+    can drop straight into a result dict's 'info' key as a stand-in when the
+    Worker itself couldn't be reached and only the direct fallback checker
+    APIs (which don't carry geo data) answered."""
+    details = (data or {}).get("details") or {}
+    country = details.get("country")
+    if not country:
+        return {}
+    as_label = details.get("isp") or details.get("organization") or "N/A"
+    if details.get("asn"):
+        as_label = f"AS{details['asn']} {as_label}".strip()
+    return {"country": country, "countryCode": details.get("country_code", "N/A"), "as": as_label}
+
+async def fetch_risk_info(client: httpx.AsyncClient, ip: str) -> dict:
+    """Read the actual risk/score JSON from the scamalytics mirror instead of
+    just handing the user a link to click."""
+    return _risk_info_from_mirror_data(await fetch_mirror_data(client, ip))
 
 def format_risk_line(risk_data: dict, ip: str) -> str:
     if risk_data and risk_data.get("risk"):
@@ -342,8 +369,8 @@ async def send_failed_ips_plain_messages(bot, chat_id, failed: list, domain_map:
             logger.error(f"Failed to send failed-IPs message: {e}")
 
 FALLBACK_API_URLS = [
-    "https://Your-Server:PORT/api/v1/check?proxyip=",
-    "https://Your-Second-API.onrender.com/api/v1/check?proxyip=",
+    "https://YourServer:PORT/api/v1/check?proxyip=",
+    "https://Your-Render-API.onrender.com/api/v1/check?proxyip=",
 ]
 # YOU CAN FIND SOURCE IN MY "ProxyIP-Checker-API" REPOSITORY
 
@@ -383,7 +410,11 @@ async def _check_via_fallback_api(client: httpx.AsyncClient, url: str, proxy_add
                 'reached': True,
                 'proxyIP': proxy_address,
                 'ping': api_data.get('ping'),
-                'info': {'country': 'N/A', 'countryCode': 'N/A', 'as': api_data.get('asOrganization', 'N/A')},
+                'info': {
+                    'country': api_data.get('countryName', 'N/A'),
+                    'countryCode': api_data.get('countryCode', 'N/A'),
+                    'as': api_data.get('asOrganization', 'N/A'),
+                },
                 'method': f'Direct Fallback API ({host})',
             }
         return {'success': False, 'reached': True}
@@ -436,7 +467,7 @@ async def validate_proxy_with_worker(ip_obj: dict or str) -> dict:
         worker_reachable = True
         worker_error = None
         try:
-            worker_check_url = f"{WORKER_URL}/api/v1/check?proxyip={quote(proxy_address, safe='')}"
+            worker_check_url = f"{WORKER_URL}/api/check?proxyip={quote(proxy_address, safe='')}"
             response = await client.get(worker_check_url, timeout=12.0)
             response.raise_for_status()
             data = response.json()
@@ -460,8 +491,16 @@ async def validate_proxy_with_worker(ip_obj: dict or str) -> dict:
                 if isinstance(ip_obj, dict):
                     data.update(ip_obj)
                 risk_info = _risk_info_from_worker_payload(data) if worker_reachable else {}
-                if not risk_info:
-                    risk_info = await fetch_risk_info(client, data.get('proxyIP', proxy_address))
+                if worker_reachable:
+                    if not risk_info:
+                        risk_info = await fetch_risk_info(client, data.get('proxyIP', proxy_address))
+                else:
+                    mirror_data = await fetch_mirror_data(client, data.get('proxyIP', proxy_address))
+                    risk_info = _risk_info_from_mirror_data(mirror_data)
+                    if (data.get('info') or {}).get('country', 'N/A') == 'N/A':
+                        geo_info = _geo_info_from_mirror_data(mirror_data)
+                        if geo_info:
+                            data['info'] = geo_info
                 data['risk_info'] = risk_info
                 data['success'] = True
                 return data
@@ -726,7 +765,7 @@ async def process_ips_in_batches(context: ContextTypes.DEFAULT_TYPE, chat_id: in
                 await asyncio.sleep(0.3)
                 await send_failed_ips_plain_messages(context.bot, chat_id, check_data['failed'], domain_map, range_map)
 
-        if output_format == "5":
+        if output_format in ["4", "5"]:
             status_suffix = f"Check {status}. ({len(check_data['checked_ips'])}/{len(check_data['ips'])} checked, {len(check_data['successful'])} successful, {len(check_data['failed'])} failed)"
             rich_markdown = build_rich_table_markdown(check_data['successful'], title, domain_map, range_map, status_suffix=status_suffix, failed=check_data['failed'])
             fallback_messages = build_table_messages(check_data['successful'], title, domain_map, range_map, status_suffix=status_suffix, failed=check_data['failed'])
@@ -820,7 +859,7 @@ async def run_check_and_post(context: ContextTypes.DEFAULT_TYPE, target_chat_id,
                 await asyncio.sleep(0.3)
                 await send_failed_ips_plain_messages(context.bot, target_chat_id, failed_results, domain_map, range_map)
 
-        if output_format == "5":
+        if output_format in ["4", "5"]:
             status_suffix = f"Check Completed. ({len(successful_results_with_info)} successful, {len(failed_results)} failed)"
             rich_markdown = build_rich_table_markdown(successful_results_with_info, title, domain_map, range_map, status_suffix=status_suffix, failed=failed_results)
             fallback_messages = build_table_messages(successful_results_with_info, title, domain_map, range_map, status_suffix=status_suffix, failed=failed_results)
