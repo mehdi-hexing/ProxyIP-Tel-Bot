@@ -1,5 +1,7 @@
 import { connect } from 'cloudflare:sockets';
 
+// --- HELPER FUNCTIONS ---
+
 async function checkProxyIPTCP(proxyIP, port) {
     let tcpSocket;
     try {
@@ -76,11 +78,11 @@ async function checkProxyIP(proxyIPInput, env) {
     const cleanIp = hostToCheck.replace(/\[|\]/g, '');
 
     const apiUrls = [
-        `https://Your-Render-API.onrender.com/api/v1/check?proxyip=${encodeURIComponent(proxyIPInput)}`,
-        `https://YourServer:PORT/api/v1/check?proxyip=${encodeURIComponent(proxyIPInput)}`
+        `https://YourServerIP:PORT/api/v1/check?proxyip=${encodeURIComponent(proxyIPInput)}`,
+        `https://YourServerRender.onrender.com/api/v1/check?proxyip=${encodeURIComponent(proxyIPInput)}`
     ];
 
-    const attempts = apiUrls.map(apiUrl => (async () => {
+    const attempts = apiUrls.map((apiUrl, idx) => (async () => {
         try {
             const timeoutPromise = new Promise((_, reject) =>
                 setTimeout(() => reject(new Error('API request timed out')), API_TIMEOUT)
@@ -89,13 +91,11 @@ async function checkProxyIP(proxyIPInput, env) {
             if (!response.ok) throw new Error(`API failed with status: ${response.status}`);
             const data = await response.json();
             if (data.proxyip === true) {
-                return { ping: data.ping, method: 'API', asOrganization: data.asOrganization };
+                return { ping: data.ping, method: `Backend API ${idx + 1}`, asOrganization: data.asOrganization };
             }
             throw new Error('API reported the IP as not a valid proxy.');
         } catch (error) {
-            let host = 'backend API';
-            try { host = new URL(apiUrl).hostname; } catch (_) {}
-            throw new Error(`[${host}] ${error.message}`);
+            throw new Error(`[Backend API ${idx + 1}] ${error.message}`);
         }
     })());
 
@@ -126,6 +126,8 @@ async function checkProxyIP(proxyIPInput, env) {
         return {
             success: true,
             proxyIP: hostToCheck,
+            input: proxyIPInput,
+            ipVersion: cleanIp.includes(':') ? 'IPv6' : 'IPv4',
             portRemote: portRemote,
             ping: winner.ping,
             timestamp: new Date().toISOString(),
@@ -133,11 +135,14 @@ async function checkProxyIP(proxyIPInput, env) {
             method: winner.method
         };
     } catch (error) {
+        console.error(`All checks failed for ${proxyIPInput}:`, error.message);
         return {
             success: false,
             proxyIP: proxyIPInput,
+            input: proxyIPInput,
+            ipVersion: cleanIp.includes(':') ? 'IPv6' : 'IPv4',
             timestamp: new Date().toISOString(),
-            error: `All checks failed: ${error.message}`
+            error: 'Proxy check failed: the IP did not pass any validation method.'
         };
     }
 }
@@ -203,9 +208,12 @@ async function getRiskData(ip, env) {
 }
 
 async function getIpInfo(ip) {
-    const defaultResponse = { status: 'fail', country: 'N/A', countryCode: 'N/A', as: 'N/A' };
+    const defaultResponse = {
+        status: 'fail', country: 'N/A', countryCode: 'N/A', city: 'N/A',
+        as: 'N/A', asname: 'N/A', isp: 'N/A', org: 'N/A', timezone: 'N/A'
+    };
     try {
-        const response = await fetch(`http://ip-api.com/json/${ip}?fields=status,message,country,countryCode,as&lang=en`);
+        const response = await fetch(`http://ip-api.com/json/${ip}?fields=status,message,country,countryCode,city,isp,org,as,asname,timezone&lang=en`);
         if (response.ok) {
             const data = await response.json();
             if (data.status !== 'fail') {
@@ -219,12 +227,18 @@ async function getIpInfo(ip) {
     const fallback = await getScamalyticsFallback(ip);
     if (fallback && fallback.details) {
         const d = fallback.details;
-        const asLabel = [d.asn ? `AS${d.asn}` : '', d.isp || d.organization || ''].filter(Boolean).join(' ');
+        const ispOrOrg = d.isp || d.organization || 'N/A';
+        const asLabel = [d.asn ? `AS${d.asn}` : '', ispOrOrg !== 'N/A' ? ispOrOrg : ''].filter(Boolean).join(' ');
         return {
             status: 'success',
             country: d.country || 'N/A',
             countryCode: d.country_code || 'N/A',
-            as: asLabel || 'N/A'
+            city: d.city || 'N/A',
+            as: asLabel || 'N/A',
+            asname: ispOrOrg,
+            isp: d.isp || 'N/A',
+            org: d.organization || 'N/A',
+            timezone: 'N/A'
         };
     }
     return defaultResponse;
@@ -295,7 +309,6 @@ function parseIPRangeServer(rangeInput) {
 }
 
 const forgivingIPv4Regex = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
-
 function isValidIPv6Core(str) {
     if (str === '') return false;
     if (str.indexOf('::') !== -1) {
@@ -351,7 +364,15 @@ function generateDomainCheckPageHTML({ domains, temporaryTOKEN }) {
         body.dark-mode .theme-toggle .moon-icon { display: block; fill: var(--text-color); stroke: var(--text-color); }
         .badge{position:relative;overflow:hidden;isolation:isolate;display:inline-flex;align-items:center;justify-content:center;height:24px;box-sizing:border-box;padding:0 .8em;font-size:.72rem;font-weight:700;line-height:1;letter-spacing:.03em;text-align:center;white-space:nowrap;vertical-align:middle;border-radius:9px;border:1px solid rgba(255,255,255,.35);color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.35);backdrop-filter:blur(14px) saturate(180%);-webkit-backdrop-filter:blur(14px) saturate(180%)}.badge::before{content:'';position:absolute;inset:0;z-index:-1;background:linear-gradient(160deg,rgba(255,255,255,.38),rgba(255,255,255,0) 55%)}.badge.success{background-color:rgba(var(--success-color-rgb),.5);box-shadow:inset 0 1px 0 rgba(255,255,255,.3),0 3px 8px rgba(var(--success-color-rgb),.3)}.badge.error{background-color:rgba(var(--error-color-rgb),.5);box-shadow:inset 0 1px 0 rgba(255,255,255,.3),0 3px 8px rgba(var(--error-color-rgb),.3)}.badge.warning{background-color:rgba(var(--warning-color-rgb),.5);box-shadow:inset 0 1px 0 rgba(255,255,255,.3),0 3px 8px rgba(var(--warning-color-rgb),.28)}.badge.critical{background-color:rgba(var(--critical-color-rgb),.62);border-color:rgba(255,255,255,.2);box-shadow:inset 0 1px 0 rgba(255,255,255,.22),0 3px 10px rgba(var(--critical-color-rgb),.45),0 0 0 1px rgba(0,0,0,.15)}.badge.info{background-color:rgba(var(--secondary-color-rgb),.5);box-shadow:inset 0 1px 0 rgba(255,255,255,.3),0 3px 8px rgba(0,0,0,.12)}
         .risk-link-button{position:relative;overflow:hidden;display:inline-flex;align-items:center;justify-content:center;height:24px;box-sizing:border-box;background-color:rgba(var(--secondary-color-rgb),.82);backdrop-filter:blur(8px) saturate(160%);-webkit-backdrop-filter:blur(8px) saturate(160%);color:#fff;text-shadow:0 1px 1px rgba(0,0,0,.18);padding:0 .8em;font-size:.72rem;font-weight:700;letter-spacing:.03em;border-radius:9px;border:1px solid rgba(255,255,255,.3);box-shadow:inset 0 1px 0 rgba(255,255,255,.3),0 3px 8px rgba(0,0,0,.15);text-decoration:none;transition:opacity .2s,transform .15s}.risk-link-button::before{content:'';position:absolute;inset:0;background:linear-gradient(160deg,rgba(255,255,255,.32),rgba(255,255,255,0) 55%);pointer-events:none}.risk-link-button:hover{opacity:.85;transform:translateY(-1px)}
-        .failed-details{margin-top:16px;background-color:rgba(var(--error-color-rgb),.06);border:1px solid var(--glass-border);border-radius:16px;padding:2px 14px;}.failed-details summary{cursor:pointer;padding:10px 0;font-size:.85rem;font-weight:600;color:var(--error-color);display:flex;align-items:center;gap:10px;list-style:none}.failed-details summary::-webkit-details-marker{display:none}.failed-details summary::before{content:'\\25B8';margin-right:2px;opacity:.7;font-size:.8em;transition:transform .2s}.failed-details[open] summary::before{transform:rotate(90deg)}.clear-failed-btn{background:none;border:1px solid var(--error-color);color:var(--error-color);border-radius:.5rem;font-size:.7rem;padding:.2em .6em;cursor:pointer;margin-left:auto;font-weight:600}.clear-failed-btn:hover{background-color:var(--error-color);color:#fff}.failed-list{display:flex;flex-wrap:wrap;gap:8px;padding:4px 0 14px}.failed-item{display:inline-flex;align-items:center;gap:6px;max-width:100%;background-color:rgba(var(--tag-bg-color-rgb),.75);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid var(--glass-border);border-radius:9px;padding:4px 6px 4px 9px;font-family:'SF Mono','Courier New',Courier,monospace;font-size:.8rem}.failed-item .fail-reason{color:var(--subtle-text-color);font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:.75em;max-width:160px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.remove-chip{background:none;border:none;color:var(--error-color);cursor:pointer;font-size:1rem;line-height:1;padding:0 2px;font-weight:700}.remove-chip:hover{opacity:.6}
+        .failed-details{margin-top:16px;background-color:rgba(var(--error-color-rgb),.06);border:1px solid var(--glass-border);border-radius:16px;padding:2px 14px;}
+        .failed-details summary{cursor:pointer;padding:10px 0;font-size:.85rem;font-weight:600;color:var(--error-color);display:flex;align-items:center;gap:10px;list-style:none}
+        .failed-details summary::-webkit-details-marker{display:none}
+        .failed-details summary::before{content:'\25B8';margin-right:2px;opacity:.7;font-size:.8em;transition:transform .2s}
+        .failed-details[open] summary::before{transform:rotate(90deg)}
+        .failed-list{display:flex;flex-wrap:wrap;gap:8px;padding:4px 0 14px}
+        .failed-item{display:inline-flex;align-items:center;gap:6px;max-width:100%;min-width:0;box-sizing:border-box;background-color:rgba(var(--tag-bg-color-rgb),.75);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid rgba(var(--error-color-rgb),.5);border-radius:9px;padding:4px 9px;font-family:'SF Mono','Courier New',Courier,monospace;font-size:.8rem}
+        .failed-item>span:first-child{overflow-wrap:anywhere;word-break:break-word;min-width:0}
+        .failed-item .fail-reason{color:var(--subtle-text-color);font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:.75em;flex:1 1 auto;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
         @media (max-width: 600px){
             .ip-item{flex-direction:column;align-items:stretch;gap:8px;padding:12px}
             .ip-details{justify-content:flex-start;padding-left:0;width:100%}
@@ -381,7 +402,7 @@ function generateDomainCheckPageHTML({ domains, temporaryTOKEN }) {
             <p style="text-align:center; padding: 20px;">Processing...</p>
         </main>
         <details id="failed-details" class="failed-details" style="display:none;">
-            <summary>❌ Failed IPs (<span id="failed-count">0</span>) <button type="button" class="clear-failed-btn" onclick="event.preventDefault();event.stopPropagation();clearFailedIPs()">Clear All</button></summary>
+            <summary>❌ Failed IPs (<span id="failed-count">0</span>)</summary>
             <div id="failed-list" class="failed-list"></div>
         </details>
         <div id="action-buttons-container"></div>
@@ -478,17 +499,7 @@ function generateDomainCheckPageHTML({ domains, temporaryTOKEN }) {
                 return;
             }
             details.style.display = '';
-            list.innerHTML = failedIPs.map(f => \`<span class="failed-item"><span onclick="copyToClipboard('\${f.ip}', this)" style="cursor:pointer;">\${f.ip}</span><span class="fail-reason" title="\${(f.error||'').replace(/"/g,'&quot;')}">\${f.error || 'Failed'}</span><button type="button" class="remove-chip" title="Remove" onclick="removeFailedIP('\${f.ip}')">×</button></span>\`).join('');
-        }
-
-        function removeFailedIP(ip) {
-            failedIPs = failedIPs.filter(f => f.ip !== ip);
-            renderFailedResults();
-        }
-
-        function clearFailedIPs() {
-            failedIPs = [];
-            renderFailedResults();
+            list.innerHTML = failedIPs.map(f => \`<span class="failed-item"><span onclick="copyToClipboard('\${f.ip}', this)" style="cursor:pointer;">\${f.ip}</span><span class="fail-reason" title="\${(f.error||'').replace(/"/g,'&quot;')}">\${f.error || 'Failed'}</span></span>\`).join('');
         }
 
         function updateSummary() {
@@ -627,7 +638,15 @@ function generateClientSideCheckPageHTML({ title, subtitleLabel, subtitleContent
         body.dark-mode .theme-toggle .moon-icon { display: block; fill: var(--text-color); stroke: var(--text-color); }
         .badge{position:relative;overflow:hidden;isolation:isolate;display:inline-flex;align-items:center;justify-content:center;height:24px;box-sizing:border-box;padding:0 .8em;font-size:.72rem;font-weight:700;line-height:1;letter-spacing:.03em;text-align:center;white-space:nowrap;vertical-align:middle;border-radius:9px;border:1px solid rgba(255,255,255,.35);color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.35);backdrop-filter:blur(14px) saturate(180%);-webkit-backdrop-filter:blur(14px) saturate(180%)}.badge::before{content:'';position:absolute;inset:0;z-index:-1;background:linear-gradient(160deg,rgba(255,255,255,.38),rgba(255,255,255,0) 55%)}.badge.success{background-color:rgba(var(--success-color-rgb),.5);box-shadow:inset 0 1px 0 rgba(255,255,255,.3),0 3px 8px rgba(var(--success-color-rgb),.3)}.badge.error{background-color:rgba(var(--error-color-rgb),.5);box-shadow:inset 0 1px 0 rgba(255,255,255,.3),0 3px 8px rgba(var(--error-color-rgb),.3)}.badge.warning{background-color:rgba(var(--warning-color-rgb),.5);box-shadow:inset 0 1px 0 rgba(255,255,255,.3),0 3px 8px rgba(var(--warning-color-rgb),.28)}.badge.critical{background-color:rgba(var(--critical-color-rgb),.62);border-color:rgba(255,255,255,.2);box-shadow:inset 0 1px 0 rgba(255,255,255,.22),0 3px 10px rgba(var(--critical-color-rgb),.45),0 0 0 1px rgba(0,0,0,.15)}.badge.info{background-color:rgba(var(--secondary-color-rgb),.5);box-shadow:inset 0 1px 0 rgba(255,255,255,.3),0 3px 8px rgba(0,0,0,.12)}
         .risk-link-button{position:relative;overflow:hidden;display:inline-flex;align-items:center;justify-content:center;height:24px;box-sizing:border-box;background-color:rgba(var(--secondary-color-rgb),.82);backdrop-filter:blur(8px) saturate(160%);-webkit-backdrop-filter:blur(8px) saturate(160%);color:#fff;text-shadow:0 1px 1px rgba(0,0,0,.18);padding:0 .8em;font-size:.72rem;font-weight:700;letter-spacing:.03em;border-radius:9px;border:1px solid rgba(255,255,255,.3);box-shadow:inset 0 1px 0 rgba(255,255,255,.3),0 3px 8px rgba(0,0,0,.15);text-decoration:none;transition:opacity .2s,transform .15s}.risk-link-button::before{content:'';position:absolute;inset:0;background:linear-gradient(160deg,rgba(255,255,255,.32),rgba(255,255,255,0) 55%);pointer-events:none}.risk-link-button:hover{opacity:.85;transform:translateY(-1px)}
-        .failed-details{margin-top:16px;background-color:rgba(var(--error-color-rgb),.06);border:1px solid var(--glass-border);border-radius:16px;padding:2px 14px;}.failed-details summary{cursor:pointer;padding:10px 0;font-size:.85rem;font-weight:600;color:var(--error-color);display:flex;align-items:center;gap:10px;list-style:none}.failed-details summary::-webkit-details-marker{display:none}.failed-details summary::before{content:'\\25B8';margin-right:2px;opacity:.7;font-size:.8em;transition:transform .2s}.failed-details[open] summary::before{transform:rotate(90deg)}.clear-failed-btn{background:none;border:1px solid var(--error-color);color:var(--error-color);border-radius:.5rem;font-size:.7rem;padding:.2em .6em;cursor:pointer;margin-left:auto;font-weight:600}.clear-failed-btn:hover{background-color:var(--error-color);color:#fff}.failed-list{display:flex;flex-wrap:wrap;gap:8px;padding:4px 0 14px}.failed-item{display:inline-flex;align-items:center;gap:6px;max-width:100%;background-color:rgba(var(--tag-bg-color-rgb),.75);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid var(--glass-border);border-radius:9px;padding:4px 6px 4px 9px;font-family:'SF Mono','Courier New',Courier,monospace;font-size:.8rem}.failed-item .fail-reason{color:var(--subtle-text-color);font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:.75em;max-width:160px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.remove-chip{background:none;border:none;color:var(--error-color);cursor:pointer;font-size:1rem;line-height:1;padding:0 2px;font-weight:700}.remove-chip:hover{opacity:.6}
+        .failed-details{margin-top:16px;background-color:rgba(var(--error-color-rgb),.06);border:1px solid var(--glass-border);border-radius:16px;padding:2px 14px;}
+        .failed-details summary{cursor:pointer;padding:10px 0;font-size:.85rem;font-weight:600;color:var(--error-color);display:flex;align-items:center;gap:10px;list-style:none}
+        .failed-details summary::-webkit-details-marker{display:none}
+        .failed-details summary::before{content:'\25B8';margin-right:2px;opacity:.7;font-size:.8em;transition:transform .2s}
+        .failed-details[open] summary::before{transform:rotate(90deg)}
+        .failed-list{display:flex;flex-wrap:wrap;gap:8px;padding:4px 0 14px}
+        .failed-item{display:inline-flex;align-items:center;gap:6px;max-width:100%;min-width:0;box-sizing:border-box;background-color:rgba(var(--tag-bg-color-rgb),.75);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid rgba(var(--error-color-rgb),.5);border-radius:9px;padding:4px 9px;font-family:'SF Mono','Courier New',Courier,monospace;font-size:.8rem}
+        .failed-item>span:first-child{overflow-wrap:anywhere;word-break:break-word;min-width:0}
+        .failed-item .fail-reason{color:var(--subtle-text-color);font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:.75em;flex:1 1 auto;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
         @media (max-width: 600px){
             .ip-item{flex-direction:column;align-items:stretch;gap:8px;padding:12px}
             .ip-details{justify-content:flex-start;padding-left:0;width:100%}
@@ -657,7 +676,7 @@ function generateClientSideCheckPageHTML({ title, subtitleLabel, subtitleContent
             <p style="text-align:center; padding: 20px;">Processing...</p>
         </main>
         <details id="failed-details" class="failed-details" style="display:none;">
-            <summary>❌ Failed IPs (<span id="failed-count">0</span>) <button type="button" class="clear-failed-btn" onclick="event.preventDefault();event.stopPropagation();clearFailedIPs()">Clear All</button></summary>
+            <summary>❌ Failed IPs (<span id="failed-count">0</span>)</summary>
             <div id="failed-list" class="failed-list"></div>
         </details>
         <div id="action-buttons-container"></div>
@@ -752,17 +771,7 @@ function generateClientSideCheckPageHTML({ title, subtitleLabel, subtitleContent
                 return;
             }
             details.style.display = '';
-            list.innerHTML = failedIPs.map(f => \`<span class="failed-item"><span onclick="copyToClipboard('\${f.ip}', this)" style="cursor:pointer;">\${f.ip}</span><span class="fail-reason" title="\${(f.error||'').replace(/"/g,'&quot;')}">\${f.error || 'Failed'}</span><button type="button" class="remove-chip" title="Remove" onclick="removeFailedIP('\${f.ip}')">×</button></span>\`).join('');
-        }
-
-        function removeFailedIP(ip) {
-            failedIPs = failedIPs.filter(f => f.ip !== ip);
-            renderFailedResults();
-        }
-
-        function clearFailedIPs() {
-            failedIPs = [];
-            renderFailedResults();
+            list.innerHTML = failedIPs.map(f => \`<span class="failed-item"><span onclick="copyToClipboard('\${f.ip}', this)" style="cursor:pointer;">\${f.ip}</span><span class="fail-reason" title="\${(f.error||'').replace(/"/g,'&quot;')}">\${f.error || 'Failed'}</span></span>\`).join('');
         }
         
         function updateSummary() {
@@ -1001,14 +1010,6 @@ const CLIENT_SCRIPT = `
         else if (normRisk === 'high') badgeClass = 'error';
         return \`<span class="badge \${badgeClass}">\${risk} (Score: \${score})</span>\`;
     }
-
-    // --- Resumable result cache -------------------------------------------------
-    // The main page runs domain / multi-IP / range checks in-place (no page nav-
-    // igation, so there was previously zero persistence at all). Refreshing mid-
-    // scan used to throw away every result and start over from IP #1. This
-    // fixes it: results are cached per distinct input set (hashed), written
-    // incrementally as each IP finishes (throttled), and force-flushed right
-    // before the tab is torn down so nothing completed is ever lost.
     function simpleHash(str) {
         let hash = 0;
         for (let i = 0; i < str.length; i++) hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
@@ -1174,7 +1175,7 @@ const CLIENT_SCRIPT = `
             });
 
             if (failed.length > 0) {
-                const failedHTML = \`<details class="failed-details" open style="margin-top:15px;"><summary>❌ Failed IPs (\${failed.length}) <button type="button" class="clear-failed-btn" onclick="event.preventDefault();event.stopPropagation();this.closest('.failed-details').remove();">Clear All</button></summary><div class="failed-list">\${failed.map(f => \`<span class="failed-item"><span onclick="copyToClipboard('\${f.ip}', this)" style="cursor:pointer;">\${f.ip}</span><span class="fail-reason" title="\${(f.error||'').replace(/"/g,'&quot;')}">\${f.error || 'Failed'}</span><button type="button" class="remove-chip" title="Remove" onclick="this.closest('.failed-item').remove();">×</button></span>\`).join('')}</div></details>\`;
+                const failedHTML = \`<details class="failed-details" open style="margin-top:15px;"><summary>❌ Failed IPs (\${failed.length})</summary><div class="failed-list">\${failed.map(f => \`<span class="failed-item"><span onclick="copyToClipboard('\${f.ip}', this)" style="cursor:pointer;">\${f.ip}</span><span class="fail-reason" title="\${(f.error||'').replace(/"/g,'&quot;')}">\${f.error || 'Failed'}</span></span>\`).join('')}</div></details>\`;
                 ipListDiv.insertAdjacentHTML('afterend', failedHTML);
             }
             
@@ -1277,7 +1278,7 @@ const CLIENT_SCRIPT = `
         }
 
         if (failedIPs.length > 0) {
-            const failedHTML = \`<details class="failed-details" open style="margin-top:15px;"><summary>❌ Failed IPs (\${failedIPs.length}) <button type="button" class="clear-failed-btn" onclick="event.preventDefault();event.stopPropagation();this.closest('.failed-details').remove();">Clear All</button></summary><div class="failed-list">\${failedIPs.map(f => \`<span class="failed-item"><span onclick="copyToClipboard('\${f.ip}', this)" style="cursor:pointer;">\${f.ip}</span><span class="fail-reason" title="\${(f.error||'').replace(/"/g,'&quot;')}">\${f.error || 'Failed'}</span><button type="button" class="remove-chip" title="Remove" onclick="this.closest('.failed-item').remove();">×</button></span>\`).join('')}</div></details>\`;
+            const failedHTML = \`<details class="failed-details" open style="margin-top:15px;"><summary>❌ Failed IPs (\${failedIPs.length})</summary><div class="failed-list">\${failedIPs.map(f => \`<span class="failed-item"><span onclick="copyToClipboard('\${f.ip}', this)" style="cursor:pointer;">\${f.ip}</span><span class="fail-reason" title="\${(f.error||'').replace(/"/g,'&quot;')}">\${f.error || 'Failed'}</span></span>\`).join('')}</div></details>\`;
             mainCard.insertAdjacentHTML('beforeend', failedHTML);
         }
 
@@ -1313,9 +1314,6 @@ const CLIENT_SCRIPT = `
         const cachedResults = loadCachedResults(storageKey);
         const persister = makePersister(storageKey, () => cachedResults);
 
-        // Restore anything already tested in a previous (possibly interrupted) run
-        // for this exact range set, so a mid-scan refresh resumes instead of
-        // re-testing thousands of IPs from IP #1 again.
         let checkedCount = 0;
         for (const ip of allIPsToTest) {
             const c = cachedResults[ip];
@@ -1393,13 +1391,14 @@ const CLIENT_SCRIPT = `
             return;
         }
         details.style.display = '';
-        list.innerHTML = currentFailedRangeIPs.map(f => \`<span class="failed-item"><span onclick="copyToClipboard('\${f.ip}', this)" style="cursor:pointer;">\${f.ip}</span><span class="fail-reason" title="\${(f.error||'').replace(/"/g,'&quot;')}">\${f.error || 'Failed'}</span><button type="button" class="remove-chip" title="Remove" onclick="currentFailedRangeIPs=currentFailedRangeIPs.filter(x=>x.ip!=='\${f.ip}');updateFailedRangeIPsDisplay();">×</button></span>\`).join('');
+        list.innerHTML = currentFailedRangeIPs.map(f => \`<span class="failed-item"><span onclick="copyToClipboard('\${f.ip}', this)" style="cursor:pointer;">\${f.ip}</span><span class="fail-reason" title="\${(f.error||'').replace(/"/g,'&quot;')}">\${f.error || 'Failed'}</span></span>\`).join('');
     }
 `;
 
 function generateMainHTML(faviconURL) {
   const year = new Date().getFullYear();
   
+  // Country UI elements restored as per user request.
   const countries = {
     'ALL': 'All Countries', 'AE': 'United Arab Emirates', 'AL': 'Albania', 'AM': 'Armenia', 'AR': 'Argentina', 'AT': 'Austria', 'AU': 'Australia', 'AZ': 'Azerbaijan', 'BE': 'Belgium', 'BG': 'Bulgaria', 'BR': 'Brazil', 'CA': 'Canada', 'CH': 'Switzerland', 'CN': 'China', 'CO': 'Colombia', 'CY': 'Cyprus', 'CZ': 'Czech Republic', 'DE': 'Germany', 'DK': 'Denmark', 'EE': 'Estonia', 'ES': 'Spain', 'FI': 'Finland', 'FR': 'France', 'GB': 'United Kingdom', 'GI': 'Gibraltar', 'HK': 'Hong Kong', 'HU': 'Hungary', 'ID': 'Indonesia', 'IE': 'Ireland', 'IL': 'Israel', 'IN': 'India', 'IR': 'Iran', 'IT': 'Italy', 'JP': 'Japan', 'KR': 'South Korea', 'KZ': 'Kazakhstan', 'LT': 'Lithuania', 'LU': 'Luxembourg', 'LV': 'Latvia', 'MD': 'Moldova', 'MX': 'Mexico', 'MY': 'Malaysia', 'NL': 'Netherlands', 'NZ': 'New Zealand', 'PH': 'Philippines', 'PL': 'Poland', 'PR': 'Puerto Rico', 'PT': 'Portugal', 'QA': 'Qatar', 'RO': 'Romania', 'RS': 'Serbia', 'RU': 'Russia', 'SA': 'Saudi Arabia', 'SC': 'Seychelles', 'SE': 'Sweden', 'SG': 'Singapore', 'SK': 'Slovakia', 'TH': 'Thailand', 'TR': 'Turkey', 'TW': 'Taiwan', 'UA': 'Ukraine', 'US': 'United States', 'UZ': 'Uzbekistan', 'VN': 'Vietnam'
   };
@@ -1446,13 +1445,11 @@ function generateMainHTML(faviconURL) {
     .failed-details summary::-webkit-details-marker{display:none}
     .failed-details summary::before{content:'\\25B8';margin-right:2px;opacity:.7;font-size:.8em;transition:transform .2s}
     .failed-details[open] summary::before{transform:rotate(90deg)}
-    .clear-failed-btn{background:none;border:1px solid var(--error-color);color:var(--error-color);border-radius:.5rem;font-size:.7rem;padding:.2em .6em;cursor:pointer;margin-left:auto;font-weight:600}
-    .clear-failed-btn:hover{background-color:var(--error-color);color:#fff}
     .failed-list{display:flex;flex-wrap:wrap;gap:8px;padding:4px 0 14px}
-    .failed-item{display:inline-flex;align-items:center;gap:6px;max-width:100%;background-color:rgba(var(--bg-secondary-rgb),.75);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid var(--glass-border);border-radius:9px;padding:4px 6px 4px 9px;font-family:'SF Mono','Courier New',Courier,monospace;font-size:.8rem}
-    .failed-item .fail-reason{color:var(--text-light);font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:.75em;max-width:160px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .remove-chip{background:none;border:none;color:var(--error-color);cursor:pointer;font-size:1rem;line-height:1;padding:0 2px;font-weight:700}
-    .remove-chip:hover{opacity:.6}
+    .failed-item{display:inline-flex;align-items:center;gap:6px;max-width:100%;min-width:0;box-sizing:border-box;background-color:rgba(var(--bg-secondary-rgb),.75);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid rgba(var(--error-color-rgb),.5);border-radius:9px;padding:4px 9px;font-family:'SF Mono','Courier New',Courier,monospace;font-size:.8rem}
+    .failed-item>span:first-child{overflow-wrap:anywhere;word-break:break-word;min-width:0}
+    .failed-item .fail-reason{color:var(--text-light);font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:.75em;flex:1 1 auto;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
     .result-item{display:flex;justify-content:flex-start;align-items:flex-start;gap:8px;margin-bottom:10px;line-height:1.5}.result-item strong{flex-shrink:0;white-space:nowrap}.result-item .value{word-break:break-all;min-width:0}
     @media (max-width: 600px){
         .ip-item-multi{flex-direction:column;align-items:stretch;gap:8px;padding:12px 5px}
@@ -1493,7 +1490,7 @@ function generateMainHTML(faviconURL) {
          <div id="successfulRangeIPsList" class="domain-ip-list"></div>
          <button id="copyRangeBtn" class="btn-primary" style="display:none; margin-top: 15px; width: 100%;">Copy Successful IPs</button>
          <details id="rangeFailedDetails" class="failed-details" style="display:none; margin-top:15px;">
-            <summary>❌ Failed IPs (<span id="rangeFailedCount">0</span>) <button type="button" class="clear-failed-btn" onclick="event.preventDefault();event.stopPropagation();currentFailedRangeIPs=[];updateFailedRangeIPsDisplay();">Clear All</button></summary>
+            <summary>❌ Failed IPs (<span id="rangeFailedCount">0</span>)</summary>
             <div id="rangeFailedList" class="failed-list"></div>
          </details>
       </div>
@@ -1527,6 +1524,7 @@ function generateMainHTML(faviconURL) {
 </html>`;
 }
 
+// --- Main Fetch Handler ---
 export default {
     async fetch(request, env, ctx) {
         const url = new URL(request.url);
@@ -1534,6 +1532,7 @@ export default {
         const UA = request.headers.get('User-Agent') || 'null';
         const hostname = url.hostname;
         
+        // --- Web UI Routes ---
         if (path.toLowerCase().startsWith('/domain/')) {
             const domains_string = decodeURIComponent(path.substring('/domain/'.length));
             const domains = domains_string.split(',').map(s => s.trim()).filter(Boolean);
@@ -1603,6 +1602,7 @@ export default {
             return new Response(CLIENT_SCRIPT, { headers: { "Content-Type": "application/javascript;charset=UTF-8" } });
         }
 
+        // --- API Routes ---
         if (path.toLowerCase().startsWith('/api/')) {
             const timestampForToken = Math.ceil(new Date().getTime() / (1000 * 60 * 31));
             const temporaryTOKEN = await doubleHash(hostname + timestampForToken + UA);
@@ -1644,18 +1644,21 @@ export default {
                         }
                         cleanIp = cleanIp.replace(/\[|\]/g, '');
                         const tcpResult = await checkProxyIPTCP(cleanIp, 443);
+                        const ipVersion = cleanIp.includes(':') ? 'IPv6' : 'IPv4';
                         if (tcpResult.success) {
                             const ipInfo = await getIpInfo(cleanIp);
                             const riskData = await getRiskData(cleanIp, env);
                             return new Response(JSON.stringify({
-                                success: true, proxyIP: proxyIPInput, portRemote: 443,
+                                success: true, proxyIP: proxyIPInput, input: proxyIPInput, ipVersion, portRemote: 443,
                                 ping: tcpResult.ping, timestamp: new Date().toISOString(),
                                 info: ipInfo, risk: riskData, method: 'TCP Fallback (recovered)'
                             }), { status: 200, headers: { "Content-Type": "application/json" } });
                         }
-                        return new Response(JSON.stringify({ success: false, proxyIP: proxyIPInput, error: `Worker-side check failed: ${tcpResult.error || 'Connection failed.'}` }), { status: 200, headers: { "Content-Type": "application/json" } });
+                        console.error(`Worker-side recovery check failed for ${proxyIPInput}:`, tcpResult.error);
+                        return new Response(JSON.stringify({ success: false, proxyIP: proxyIPInput, input: proxyIPInput, ipVersion, error: 'Proxy check failed: the IP did not pass any validation method.' }), { status: 200, headers: { "Content-Type": "application/json" } });
                     } catch (fallbackError) {
-                        return new Response(JSON.stringify({ success: false, proxyIP: proxyIPInput, error: `Worker-side check failed: ${fallbackError.message}` }), { status: 200, headers: { "Content-Type": "application/json" } });
+                        console.error(`Worker-side recovery check errored for ${proxyIPInput}:`, fallbackError.message);
+                        return new Response(JSON.stringify({ success: false, proxyIP: proxyIPInput, input: proxyIPInput, error: 'Proxy check failed: the IP did not pass any validation method.' }), { status: 200, headers: { "Content-Type": "application/json" } });
                     }
                 }
             }
